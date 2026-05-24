@@ -1,0 +1,6 @@
+# Local overrides
+data/cache/
+data/parquet/
+*.parquet
+mlruns/
+experiments/
