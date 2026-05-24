@@ -45,7 +45,7 @@ storage = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["config*", "data*", "engines*", "ml*", "mcts*", "signal_engine*", "risk*", "validation*", "research*", "paper_trading*", "live*", "api*"]
+include = ["config*", "data*", "engines*", "agents*", "ml*", "mcts*", "signal_engine*", "risk*", "validation*", "research*", "paper_trading*", "live*", "api*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

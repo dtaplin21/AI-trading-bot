@@ -1,32 +1,67 @@
-# Architecture
+# Multi-Agent Trading Intelligence System
 
-## Data Flow
+## Principle
+
+Every chart is processed by **every method**. Every method produces features. The prediction model scores the full feature set. The **Risk Agent** decides whether action is allowed. The **Learning Agent** logs outcomes for scheduled retraining.
+
+**No risk approval = no trade.**
+
+## Agent Hierarchy
 
 ```
-Market Data → Processors → Engine Layers (1–9) → Signal Builder → SignalRank → Risk Engine → Paper/Live
+Trading Supervisor
+├── Market Data Agent          → clean/store candles (no decisions)
+├── Chart Reading Agent        → swings, trend, S/R, VWAP
+├── Method Analysis Agents     → all theories, every candle
+│   ├── Level 369 Agent
+│   ├── Fibonacci / Spiral Agent
+│   ├── Ancient Number Agent
+│   ├── Gann Agent (research modifier only)
+│   ├── Elliott Wave Agent (probabilistic)
+│   ├── Harmonic Agent
+│   ├── Candlestick Agent
+│   ├── Fractal Agent
+│   ├── Balance Line Agent
+│   ├── Momentum / Acceleration Agent
+│   ├── Markov State Agent
+│   ├── Monte Carlo Agent
+│   └── Strategy Math Agent
+├── Feature Fusion Agent       → unified feature vector + SignalRank
+├── Prediction Agent           → start/stop/wait/avoid (LightGBM path)
+├── Trade Planning Agent       → MCTS action proposals
+├── Risk Agent                 → veto gate
+├── Execution Agent            → paper broker (v1)
+├── Learning Agent             → observe/store (no live retrain)
+└── Audit Agent                → explainability
 ```
 
-## Layer Priority
+## Per-Candle Pipeline
 
-| Priority | Layers |
-|----------|--------|
-| Highest | Price Action, Harmonics, ML, SignalRank, Risk |
-| High | Number Theory, Market State, Strategy Math, Monte Carlo, MCTS |
-| Medium | Elliott Wave (probabilistic only) |
-| Low | Gann Geometry (experimental) |
+```
+New candle → Market Data → Chart Reading → All Methods → Feature Fusion
+→ Prediction → MCTS Planning → Risk Agent → Execution (if approved)
+→ Learning log → Audit report
+```
 
-## Key Modules
+## Safe Learning Loop
 
-- `signal_engine/signal_rank_service.py` — weighted 0–100 score
-- `signal_engine/signal_builder.py` — orchestrates layer outputs
-- `risk/risk_engine.py` — final approval gate
-- `validation/random_baseline_generator.py` — geometric edge validation
+```
+Observe → Store → Label → Backtest → Retrain → Validate → Paper test → Approve → Deploy
+```
+
+Never: Observe → Retrain → Immediately live trade.
+
+## Implementation Notes
+
+- Agents are **Python services**, not chat LLMs
+- LLM layer reserved for explanation/research summaries only
+- Existing `engines/` modules are wrapped by method agents
+- Entry point: `agents/supervisor.py` → `TradingSupervisor.process_candle()`
 
 ## API
 
-FastAPI app at `api/main.py`:
+```bash
+POST /signals/analyze?symbol=MES&timeframe=5m&historical_sample_size=1420
+```
 
-- `GET /health`
-- `GET /signals`, `POST /signals/analyze`
-- `POST /backtest`
-- `GET /state/{symbol}`
+Returns full `PipelineDecision` + human-readable audit explanation.

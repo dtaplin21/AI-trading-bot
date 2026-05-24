@@ -4,21 +4,7 @@ Multi-layer futures trading signal engine with **SignalRank** scoring (0–100),
 
 ## Architecture
 
-Eleven analytical layers feed into SignalRank:
-
-| Layer | Module | Role |
-|-------|--------|------|
-| 1 | Price Action | Candlestick psychology, wick analysis |
-| 2 | Geometry | Fibonacci, harmonics, Gann (research) |
-| 3 | Wave | Probabilistic Elliott Wave |
-| 4 | Number Theory | 369 levels, biblical cycles |
-| 5 | Market State | Markov regime detection |
-| 6 | Strategy Math | EV, Sharpe, R-multiples |
-| 7 | Monte Carlo | Scenario simulation |
-| 8 | ML | Signal classifiers |
-| 9 | MCTS | Trade planning |
-| 10 | Signal Engine | SignalRank aggregation |
-| 11 | Risk | Approval / rejection gate |
+Eleven analytical layers feed into SignalRank, orchestrated by the **Trading Supervisor** multi-agent pipeline (`agents/supervisor.py`). See `docs/architecture.md` for the full agent hierarchy.
 
 ## Quick Start
 
