@@ -4,3 +4,6 @@ data/parquet/
 *.parquet
 mlruns/
 experiments/
+models/candidate_*.txt
+models/*.meta.json
+logs/

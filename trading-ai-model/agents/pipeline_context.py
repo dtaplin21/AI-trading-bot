@@ -51,6 +51,7 @@ class PipelineContext:
             risk=self.risk,
             execution=self.execution,
             audit=self.audit,
+            llm_explanation=self.metadata.get("llm_explanation"),
             signal_rank=self.fused.signal_rank if self.fused else 0,
             status=self._status(),
         )

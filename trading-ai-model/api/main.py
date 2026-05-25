@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import backtest, health, market_state, signals, trades
+from api.routes import backtest, health, market_state, models, signals, trades
 
 app = FastAPI(title="Trading AI Model", version="0.1.0")
 
@@ -20,6 +20,7 @@ app.include_router(signals.router, prefix="/signals", tags=["signals"])
 app.include_router(backtest.router, prefix="/backtest", tags=["backtest"])
 app.include_router(market_state.router, prefix="/state", tags=["market_state"])
 app.include_router(trades.router, prefix="/trades", tags=["trades"])
+app.include_router(models.router, prefix="/models", tags=["models"])
 
 
 @app.get("/")

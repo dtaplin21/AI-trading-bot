@@ -114,5 +114,6 @@ class PipelineDecision(BaseModel):
     risk: Optional[RiskVerdict] = None
     execution: Optional[ExecutionResult] = None
     audit: Optional[AuditReport] = None
+    llm_explanation: Optional[str] = None
     signal_rank: int = 0
     status: str = "no_action"

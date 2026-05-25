@@ -1,12 +1,16 @@
-"""Audit / Explainability Agent — human-readable signal reasoning."""
+"""Audit / Explainability Agent + optional LLM layer."""
 
 from agents.base import BaseAgent
+from agents.llm_explainer import LLMExplainer
 from agents.pipeline_context import PipelineContext
 from agents.schemas import AuditReport
 
 
 class AuditAgent(BaseAgent):
     name = "audit"
+
+    def __init__(self):
+        self.llm = LLMExplainer()
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         reasons: list[str] = []
@@ -58,19 +62,22 @@ class AuditAgent(BaseAgent):
         else:
             summary = "The system recommends waiting because:"
 
-        ctx.audit = AuditReport(
+        audit = AuditReport(
             summary=summary,
             reasons=reasons or ["insufficient confluence across methods"],
             method_agreement=agreement,
             disagreements=disagreements,
         )
+        ctx.audit = audit
+
+        decision = ctx.to_decision()
+        ctx.metadata["llm_explanation"] = self.llm.explain(decision, audit)
         return ctx
 
     def explain(self, ctx: PipelineContext) -> str:
+        if ctx.metadata.get("llm_explanation"):
+            return ctx.metadata["llm_explanation"]
         if not ctx.audit:
             return "No audit available."
         lines = [ctx.audit.summary] + [f"- {r}" for r in ctx.audit.reasons]
-        if ctx.audit.disagreements:
-            lines.append("\nMethod concerns:")
-            lines.extend(f"- {d}" for d in ctx.audit.disagreements)
         return "\n".join(lines)

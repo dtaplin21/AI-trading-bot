@@ -18,10 +18,23 @@ class Settings(BaseSettings):
     api_port: int = 8000
 
     market_data_provider: str = ""
+    database_url: str = ""
     influxdb_url: str = ""
     influxdb_token: str = ""
     influxdb_org: str = ""
     influxdb_bucket: str = ""
+
+    # Model / ML
+    model_dir: str = "./models"
+    production_model_id: str = "lightgbm_production"
+    retrain_schedule_days: int = 7
+    data_stale_minutes: int = 15
+
+    # LLM explanation (never used for execution)
+    llm_enabled: bool = False
+    llm_api_key: str = ""
+    llm_model: str = "gpt-4o-mini"
+    llm_base_url: str = "https://api.openai.com/v1"
 
     max_daily_loss_pct: float = 2.0
     max_drawdown_pct: float = 10.0

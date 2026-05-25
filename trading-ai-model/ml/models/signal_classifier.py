@@ -1,9 +1,10 @@
-"""Main signal prediction model."""
+"""Main signal prediction model — LightGBM with rule fallback."""
 
-from ml.models.base_model import BaseModel
+from ml.models.lightgbm_classifier import LightGBMSignalClassifier
 
 
-class SignalClassifier(BaseModel):
+class SignalClassifier(LightGBMSignalClassifier):
+    """Alias for production classifier."""
+
     def predict(self, features: dict) -> dict:
-        return {"signal_probability": 0.5}
-
+        return super().predict(features)

@@ -32,6 +32,30 @@ Open http://localhost:5173 — the dashboard fetches trades from `GET /trades` (
 
 Run both terminals together for live API data; the UI falls back to mock trades if the API is down.
 
+### TimescaleDB
+
+```bash
+docker compose up -d
+cp .env.example .env   # DATABASE_URL=postgresql://trading:trading@localhost:5432/trading_ai
+pip install -e ".[storage]"
+```
+
+Candles are stored automatically by the Market Data Agent on each pipeline run.
+
+### Model retraining (weekly, manual promotion)
+
+```bash
+pip install -e ".[ml]"
+python scripts/run_scheduled_retrain.py
+# Then via API:
+# POST /models/{id}/approve
+# POST /models/{id}/promote?approved_by=your_name
+```
+
+### LLM explanations (optional)
+
+Set `LLM_ENABLED=true` and `LLM_API_KEY=...` in `.env`. The LLM only explains decisions — it never executes trades.
+
 ## Constraint Rules
 
 - **Gann**: research-only; modifies SignalRank ± only; 300+ samples + random baseline required

@@ -5,7 +5,7 @@ Every candle triggers all method agents before any trade decision.
 No risk approval = no trade.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 
@@ -45,17 +45,24 @@ class TradingSupervisor:
     def process_candle(
         self,
         symbol: str,
-        ohlcv: pd.DataFrame,
+        ohlcv: pd.DataFrame | None = None,
         timeframe: str = "5m",
         portfolio: PortfolioState | None = None,
         historical_sample_size: int = 0,
         execute: bool = False,
+        load_from_db: bool = True,
     ) -> PipelineDecision:
+        if ohlcv is None or (hasattr(ohlcv, "empty") and ohlcv.empty):
+            if load_from_db:
+                ohlcv = self.market_data.load_from_db(symbol, timeframe)
+            if ohlcv is None or ohlcv.empty:
+                ohlcv = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
         ctx = PipelineContext(
             symbol=symbol,
             timeframe=timeframe,
             ohlcv=ohlcv,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             portfolio=portfolio or PortfolioState(),
             historical_sample_size=historical_sample_size,
         )
@@ -101,6 +108,8 @@ class TradingSupervisor:
         return ctx.to_decision()
 
     def explain_last(self, decision: PipelineDecision) -> str:
+        if decision.llm_explanation:
+            return decision.llm_explanation
         if not decision.audit:
             return "No explanation available."
         lines = [decision.audit.summary] + [f"- {r}" for r in decision.audit.reasons]

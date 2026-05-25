@@ -1,12 +1,14 @@
-"""Learning / Retraining Agent — observe, store, label; never live-retrain."""
+"""Learning / Retraining Agent — observe, store, schedule retrain; never live-retrain."""
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 
 from agents.base import BaseAgent
 from agents.pipeline_context import PipelineContext
+from config.settings import get_settings
+from data.storage.timescale_store import TimescaleStore
 
 
 class RetrainStage(str, Enum):
@@ -21,17 +23,7 @@ class RetrainStage(str, Enum):
     DEPLOY = "deploy"
 
 
-SAFE_PIPELINE = [
-    RetrainStage.OBSERVE,
-    RetrainStage.STORE,
-    RetrainStage.LABEL,
-    RetrainStage.BACKTEST,
-    RetrainStage.RETRAIN,
-    RetrainStage.VALIDATE,
-    RetrainStage.PAPER_TEST,
-    RetrainStage.APPROVE,
-    RetrainStage.DEPLOY,
-]
+SAFE_PIPELINE = list(RetrainStage)
 
 
 class LearningAgent(BaseAgent):
@@ -42,13 +34,15 @@ class LearningAgent(BaseAgent):
 
     name = "learning"
 
-    def __init__(self, log_dir: str = "./logs/training"):
-        self.log_dir = Path(log_dir)
+    def __init__(self, log_dir: str | None = None, store: TimescaleStore | None = None):
+        settings = get_settings()
+        self.log_dir = Path(log_dir or "./logs/training")
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.store = store or TimescaleStore()
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         row = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "symbol": ctx.symbol,
             "timeframe": ctx.timeframe,
             "signal_rank": ctx.fused.signal_rank if ctx.fused else 0,
@@ -61,18 +55,35 @@ class LearningAgent(BaseAgent):
             "features": ctx.fused.features if ctx.fused else {},
             "retrain_stage": RetrainStage.OBSERVE.value,
         }
+
         path = self.log_dir / "observations.jsonl"
         with path.open("a") as f:
             f.write(json.dumps(row, default=str) + "\n")
+
+        if self.store.available:
+            self.store.insert_observation(
+                ctx.symbol,
+                ctx.timeframe,
+                row["signal_rank"],
+                row,
+            )
+
         ctx.metadata["learning_logged"] = True
+        ctx.metadata["retrain_due"] = self._check_retrain_due()
         return ctx
 
+    def _check_retrain_due(self) -> bool:
+        try:
+            from agents.learning.retrain_pipeline import RetrainPipeline
+
+            return RetrainPipeline().due_for_retrain()
+        except Exception:
+            return False
+
     def _method_agreement(self, ctx: PipelineContext) -> list[str]:
-        agreed = []
-        for o in ctx.method_outputs:
-            if not o.skipped and o.confidence >= 0.55:
-                agreed.append(o.method)
-        return agreed
+        return [
+            o.method for o in ctx.method_outputs if not o.skipped and o.confidence >= 0.55
+        ]
 
     def _method_disagreement(self, ctx: PipelineContext) -> list[str]:
         return [o.method for o in ctx.method_outputs if o.skipped or o.confidence < 0.4]

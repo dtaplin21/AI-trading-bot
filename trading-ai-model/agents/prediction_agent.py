@@ -27,6 +27,7 @@ class PredictionAgent(BaseAgent):
 
         ml_out = self.classifier.predict(f)
         ml_conf = float(ml_out.get("signal_probability", 0.5))
+        model_version = ml_out.get("model_version", "rule_fallback")
 
         bullish_signals = sum(
             [
@@ -52,6 +53,6 @@ class PredictionAgent(BaseAgent):
             expected_value=ev,
             expected_drawdown=ror * 100,
             model_confidence=model_confidence,
-            model_version="rule_v0",
+            model_version=model_version,
         )
         return ctx

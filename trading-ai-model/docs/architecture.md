@@ -62,6 +62,19 @@ Never: Observe → Retrain → Immediately live trade.
 
 ```bash
 POST /signals/analyze?symbol=MES&timeframe=5m&historical_sample_size=1420
+GET  /models
+POST /models/retrain?force=false
+POST /models/{id}/approve
+POST /models/{id}/promote?approved_by=admin
 ```
 
-Returns full `PipelineDecision` + human-readable audit explanation.
+Returns full `PipelineDecision` + `llm_explanation` when LLM enabled.
+
+## Infrastructure
+
+| Component | Module | Notes |
+|-----------|--------|-------|
+| TimescaleDB | `data/storage/timescale_store.py` | `docker compose up -d` |
+| LightGBM | `ml/models/lightgbm_classifier.py` | Falls back to rules if no model |
+| Retrain pipeline | `agents/learning/retrain_pipeline.py` | Weekly schedule, manual promote |
+| LLM explainer | `agents/llm_explainer.py` | Explanation only, never executes |
