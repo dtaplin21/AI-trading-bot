@@ -41,3 +41,33 @@ CREATE TABLE IF NOT EXISTS model_registry (
     approved_by     TEXT,
     promoted_at     TIMESTAMPTZ
 );
+
+CREATE TABLE IF NOT EXISTS news_events (
+    id              TEXT PRIMARY KEY,
+    source          TEXT NOT NULL,
+    headline        TEXT NOT NULL,
+    summary         TEXT,
+    url             TEXT,
+    published_at    TIMESTAMPTZ NOT NULL,
+    event_type      TEXT,
+    impact_level    TEXT,
+    impact_score    DOUBLE PRECISION,
+    urgency_score   DOUBLE PRECISION,
+    sentiment_score DOUBLE PRECISION,
+    sentiment_label TEXT,
+    news_mode       TEXT,
+    symbols_affected JSONB,
+    payload         JSONB,
+    ingested_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_news_published ON news_events (published_at DESC);
+
+CREATE TABLE IF NOT EXISTS symbol_news_impacts (
+    news_event_id   TEXT NOT NULL,
+    symbol          TEXT NOT NULL,
+    impact_score    DOUBLE PRECISION,
+    direction_bias  INT,
+    relevance       DOUBLE PRECISION,
+    PRIMARY KEY (news_event_id, symbol)
+);

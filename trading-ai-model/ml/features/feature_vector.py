@@ -21,6 +21,14 @@ FEATURE_KEYS = [
     "elliott_wave_wave_3_probability",
     "level_369_reversal_zone_active",
     "monte_carlo_prob_positive_path",
+    "news_sentiment_score",
+    "news_impact_score",
+    "news_urgency_score",
+    "news_direction_alignment",
+    "news_risk_penalty",
+    "news_event_count_2h",
+    "news_high_impact_count",
+    "news_size_reduction",
 ]
 
 

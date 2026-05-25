@@ -35,6 +35,28 @@ Trading Supervisor
 └── Audit Agent                → explainability
 ```
 
+## Market News Intelligence (`agents/news/`)
+
+Runs on a **60s async loop** (API startup) or sync bootstrap for CLI/tests.
+
+```
+MarketNewsAgent
+├── NewsIngestionService      → RSS feeds (Reuters, CNBC, MarketWatch)
+├── NewsSentimentService      → classify + score
+├── NewsSymbolMapper          → MES, ES, NQ, RTY, YM mapping
+├── EconomicCalendarService   → blackout windows + size reduction
+└── NewsRiskFilterService     → NewsFeatures for ML
+```
+
+| Caller | Method |
+|--------|--------|
+| Feature Fusion | `get_news_features(symbol, technical_direction)` |
+| Risk Agent | `is_trading_blocked()`, `get_size_reduction_factor()` |
+| Audit Agent | `get_latest_explanation(symbol)` |
+| Learning Agent | `get_recent_events(symbol, hours=24)` |
+
+API: `GET /news/status`, `POST /news/refresh`, `GET /news/features/{symbol}`
+
 ## Per-Candle Pipeline
 
 ```

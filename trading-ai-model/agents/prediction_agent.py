@@ -40,7 +40,12 @@ class PredictionAgent(BaseAgent):
 
         model_confidence = (ml_conf + rank / 100 + bullish_signals / 4) / 3
         should_start = rank >= self.min_signal_rank and ev > 0 and ror < 0.05 and model_confidence >= self.min_confidence
-        should_avoid = rank < 50 or ror > 0.1 or f.get("momentum_momentum_score", 0.5) < 0.2
+        should_avoid = (
+            rank < 50
+            or ror > 0.1
+            or f.get("momentum_momentum_score", 0.5) < 0.2
+            or bool(f.get("news_news_trading_blocked") or f.get("news_trading_blocked"))
+        )
 
         ctx.prediction = PredictionOutput(
             should_start=should_start,

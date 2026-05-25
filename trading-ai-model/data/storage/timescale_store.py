@@ -53,6 +53,38 @@ CREATE TABLE IF NOT EXISTS model_registry (
 );
 """
 
+NEWS_EVENTS_DDL = """
+CREATE TABLE IF NOT EXISTS news_events (
+    id              TEXT PRIMARY KEY,
+    source          TEXT NOT NULL,
+    headline        TEXT NOT NULL,
+    summary         TEXT,
+    url             TEXT,
+    published_at    TIMESTAMPTZ NOT NULL,
+    event_type      TEXT,
+    impact_level    TEXT,
+    impact_score    DOUBLE PRECISION,
+    urgency_score   DOUBLE PRECISION,
+    sentiment_score DOUBLE PRECISION,
+    sentiment_label TEXT,
+    news_mode       TEXT,
+    symbols_affected JSONB,
+    payload         JSONB,
+    ingested_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+"""
+
+SYMBOL_IMPACTS_DDL = """
+CREATE TABLE IF NOT EXISTS symbol_news_impacts (
+    news_event_id   TEXT NOT NULL,
+    symbol          TEXT NOT NULL,
+    impact_score    DOUBLE PRECISION,
+    direction_bias  INT,
+    relevance       DOUBLE PRECISION,
+    PRIMARY KEY (news_event_id, symbol)
+);
+"""
+
 
 class TimescaleStore:
     """Postgres/TimescaleDB store with graceful fallback when DB unavailable."""
@@ -73,6 +105,8 @@ class TimescaleStore:
                     cur.execute(OHLCV_DDL)
                     cur.execute(OBSERVATIONS_DDL)
                     cur.execute(MODEL_REGISTRY_DDL)
+                    cur.execute(NEWS_EVENTS_DDL)
+                    cur.execute(SYMBOL_IMPACTS_DDL)
                     try:
                         cur.execute(
                             "SELECT create_hypertable('ohlcv_candles', 'time', if_not_exists => TRUE);"
@@ -213,3 +247,62 @@ class TimescaleStore:
                 cur.execute(sql, (limit,))
                 rows = cur.fetchall()
         return [r[0] for r in rows]
+
+    def insert_news_events(self, events: list) -> int:
+        if not self._available or not events:
+            return 0
+        sql = """
+            INSERT INTO news_events (
+                id, source, headline, summary, url, published_at,
+                event_type, impact_level, impact_score, urgency_score,
+                sentiment_score, sentiment_label, news_mode, symbols_affected, payload
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb)
+            ON CONFLICT (id) DO NOTHING
+        """
+        rows = []
+        for e in events:
+            pub = e.published_at
+            if pub.tzinfo is None:
+                pub = pub.replace(tzinfo=timezone.utc)
+            rows.append(
+                (
+                    e.id,
+                    e.source,
+                    e.headline,
+                    e.summary,
+                    e.url,
+                    pub,
+                    e.event_type.value,
+                    e.impact_level.value,
+                    e.impact_score,
+                    e.urgency_score,
+                    e.sentiment_score,
+                    e.sentiment_label.value,
+                    e.news_mode.value,
+                    json.dumps(e.symbols_affected),
+                    json.dumps(e.model_dump(), default=str),
+                )
+            )
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.executemany(sql, rows)
+            conn.commit()
+        return len(rows)
+
+    def insert_symbol_impacts(self, impacts: list) -> int:
+        if not self._available or not impacts:
+            return 0
+        sql = """
+            INSERT INTO symbol_news_impacts (news_event_id, symbol, impact_score, direction_bias, relevance)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (news_event_id, symbol) DO UPDATE SET
+                impact_score = EXCLUDED.impact_score,
+                direction_bias = EXCLUDED.direction_bias,
+                relevance = EXCLUDED.relevance
+        """
+        rows = [(i.news_event_id, i.symbol, i.impact_score, i.direction_bias, i.relevance) for i in impacts]
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.executemany(sql, rows)
+            conn.commit()
+        return len(rows)

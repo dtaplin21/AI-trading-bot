@@ -40,3 +40,8 @@ LLM_BASE_URL=https://api.openai.com/v1
 # Paper trading
 PAPER_TRADING_ENABLED=true
 SIGNAL_LOG_DIR=./logs/signals
+
+# News intelligence
+NEWS_ENABLED=true
+NEWS_POLLING_INTERVAL_SECONDS=60
+NEWS_LOAD_DEFAULT_CALENDAR=false

@@ -2,6 +2,7 @@
 
 from agents.base import BaseAgent
 from agents.llm_explainer import LLMExplainer
+from agents.news_runtime import get_news_agent
 from agents.pipeline_context import PipelineContext
 from agents.schemas import AuditReport
 
@@ -9,8 +10,13 @@ from agents.schemas import AuditReport
 class AuditAgent(BaseAgent):
     name = "audit"
 
-    def __init__(self):
+    def __init__(self, news_agent=None):
         self.llm = LLMExplainer()
+        self._news = news_agent
+
+    @property
+    def news(self):
+        return self._news or get_news_agent()
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         reasons: list[str] = []
@@ -53,6 +59,13 @@ class AuditAgent(BaseAgent):
             reasons.append(f"RISK VETO: {ctx.risk.reason}")
         elif ctx.risk and ctx.risk.approved:
             reasons.append("risk agent approved trade")
+
+        news_ctx = self.news.get_latest_explanation(ctx.symbol)
+        if "No significant news" not in news_ctx:
+            reasons.append(news_ctx.split("\n")[0])
+            for line in news_ctx.split("\n")[1:4]:
+                if line.strip().startswith("•"):
+                    reasons.append(line.strip().lstrip("• "))
 
         direction = "long" if ctx.trade_plan and "long" in ctx.trade_plan.action.value else "short"
         if ctx.prediction and ctx.prediction.should_start:

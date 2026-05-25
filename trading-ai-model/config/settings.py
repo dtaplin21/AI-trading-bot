@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     paper_trading_enabled: bool = True
     signal_log_dir: str = "./logs/signals"
 
+    # News intelligence
+    news_enabled: bool = True
+    news_polling_interval_seconds: int = 60
+    news_load_default_calendar: bool = False
+
 
 @lru_cache
 def get_settings() -> Settings:

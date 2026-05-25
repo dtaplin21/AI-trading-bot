@@ -21,6 +21,9 @@ from agents.prediction_agent import PredictionAgent
 from agents.risk_agent import RiskAgent
 from agents.schemas import PipelineDecision
 from agents.trade_planning_agent import TradePlanningAgent
+from agents.news_runtime import bootstrap_news_sync, get_news_agent
+
+
 from risk.risk_engine import PortfolioState
 
 
@@ -30,17 +33,19 @@ class TradingSupervisor:
     Ensures all required methods run before decision layer.
     """
 
-    def __init__(self, execution_mode: str = "paper"):
+    def __init__(self, execution_mode: str = "paper", news_agent=None):
+        self.news = news_agent or get_news_agent()
+        bootstrap_news_sync()
         self.market_data = MarketDataAgent()
         self.chart_reading = ChartReadingAgent()
         self.method_runner = MethodAnalysisRunner()
-        self.feature_fusion = FeatureFusionAgent()
+        self.feature_fusion = FeatureFusionAgent(news_agent=self.news)
         self.prediction = PredictionAgent()
         self.trade_planning = TradePlanningAgent()
-        self.risk = RiskAgent()
+        self.risk = RiskAgent(news_agent=self.news)
         self.execution = ExecutionAgent(mode=execution_mode)
-        self.learning = LearningAgent()
-        self.audit = AuditAgent()
+        self.learning = LearningAgent(news_agent=self.news)
+        self.audit = AuditAgent(news_agent=self.news)
 
     def process_candle(
         self,

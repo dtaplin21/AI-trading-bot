@@ -6,6 +6,7 @@ from enum import Enum
 from pathlib import Path
 
 from agents.base import BaseAgent
+from agents.news_runtime import get_news_agent
 from agents.pipeline_context import PipelineContext
 from config.settings import get_settings
 from data.storage.timescale_store import TimescaleStore
@@ -34,11 +35,16 @@ class LearningAgent(BaseAgent):
 
     name = "learning"
 
-    def __init__(self, log_dir: str | None = None, store: TimescaleStore | None = None):
+    def __init__(self, log_dir: str | None = None, store: TimescaleStore | None = None, news_agent=None):
         settings = get_settings()
         self.log_dir = Path(log_dir or "./logs/training")
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.store = store or TimescaleStore()
+        self._news = news_agent
+
+    @property
+    def news(self):
+        return self._news or get_news_agent()
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         row = {
@@ -53,6 +59,9 @@ class LearningAgent(BaseAgent):
             "risk_approved": ctx.risk.approved if ctx.risk else False,
             "executed": ctx.execution.executed if ctx.execution else False,
             "features": ctx.fused.features if ctx.fused else {},
+            "news_events_24h": [
+                e.model_dump() for e in self.news.get_recent_events(ctx.symbol, hours=24)
+            ],
             "retrain_stage": RetrainStage.OBSERVE.value,
         }
 

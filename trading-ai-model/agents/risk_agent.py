@@ -1,6 +1,7 @@
-"""Risk Agent — veto power; no approval = no trade."""
+"""Risk Agent — veto power; includes news blackout checks."""
 
 from agents.base import BaseAgent
+from agents.news_runtime import get_news_agent
 from agents.pipeline_context import PipelineContext
 from agents.schemas import RiskVerdict
 from config.risk_params import get_risk_limits
@@ -13,9 +14,14 @@ class RiskAgent(BaseAgent):
     MAX_TRADES_PER_DAY = 10
     MAX_RISK_OF_RUIN = 0.05
 
-    def __init__(self):
+    def __init__(self, news_agent=None):
         self.engine = RiskEngine()
         self.limits = get_risk_limits()
+        self._news = news_agent
+
+    @property
+    def news(self):
+        return self._news or get_news_agent()
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         passed: list[str] = []
@@ -25,6 +31,17 @@ class RiskAgent(BaseAgent):
             failed.append("data_stale")
         else:
             passed.append("data_fresh")
+
+        blocked, block_reason = self.news.is_trading_blocked(ctx.symbol)
+        if blocked:
+            failed.append(f"news_blackout:{block_reason}")
+        else:
+            passed.append("news_clear")
+
+        if self.news.requires_manual_approval(ctx.symbol):
+            failed.append("news_requires_manual_approval")
+        else:
+            passed.append("news_auto_ok")
 
         rank = ctx.fused.signal_rank if ctx.fused else 0
         decision = self.engine.evaluate(rank, ctx.portfolio, ctx.symbol)
@@ -58,11 +75,13 @@ class RiskAgent(BaseAgent):
             passed.append("all_methods_reviewed")
 
         approved = len(failed) == 0 and decision.approved
+        size_factor = self.news.get_size_reduction_factor(ctx.symbol)
+        max_size = decision.max_position_size * size_factor if approved else 0.0
 
         ctx.risk = RiskVerdict(
             approved=approved,
             reason=failed[0] if failed else None,
-            max_position_size=decision.max_position_size if approved else 0.0,
+            max_position_size=max_size,
             checks_passed=passed,
             checks_failed=failed,
         )

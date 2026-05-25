@@ -1,11 +1,11 @@
-"""Feature Fusion Agent — combines all method outputs for ML."""
+"""Feature Fusion Agent — combines method outputs + news features."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from agents.base import BaseAgent
+from agents.news_runtime import get_news_agent
 from agents.pipeline_context import PipelineContext
 from agents.schemas import FusedFeatures
-from config.model_weights import get_layer_weights
 from signal_engine.layer_scores import LayerScores
 from signal_engine.signal_rank_service import SignalRankService
 
@@ -13,8 +13,13 @@ from signal_engine.signal_rank_service import SignalRankService
 class FeatureFusionAgent(BaseAgent):
     name = "feature_fusion"
 
-    def __init__(self):
+    def __init__(self, news_agent=None):
         self.rank_service = SignalRankService()
+        self._news = news_agent
+
+    @property
+    def news(self):
+        return self._news or get_news_agent()
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         features: dict = {
@@ -35,7 +40,13 @@ class FeatureFusionAgent(BaseAgent):
             features["higher_highs"] = ctx.chart.higher_highs
             features["higher_lows"] = ctx.chart.higher_lows
 
-        # Flatten key booleans for ML
+        tech_dir = self._technical_direction(ctx)
+        news_features = self.news.get_news_features(ctx.symbol, tech_dir)
+        ctx.metadata["news_features"] = news_features.model_dump()
+        for key, val in news_features.model_dump().items():
+            if key != "symbol":
+                features[f"news_{key}" if not key.startswith("news_") else key] = val
+
         features["near_666_level"] = features.get("ancient_number_number_zone") == "66.6%"
         features["near_618_fib"] = features.get("fibonacci_spiral_near_618_fib", False)
         features["bullish_rejection_candle"] = features.get("candlestick_bullish_rejection_candle", False)
@@ -51,13 +62,16 @@ class FeatureFusionAgent(BaseAgent):
         features["risk_of_ruin"] = features.get("strategy_math_risk_of_ruin", 0.0)
 
         signal_rank = self.rank_service.compute_rank(scores)
+        penalty = float(news_features.news_risk_penalty)
+        if penalty > 0:
+            signal_rank = int(max(0, signal_rank - penalty * 15))
         features["signal_rank"] = signal_rank
 
         skipped = sum(1 for o in ctx.method_outputs if o.skipped)
         ctx.fused = FusedFeatures(
             symbol=ctx.symbol,
             timeframe=ctx.timeframe,
-            timestamp=ctx.timestamp or datetime.utcnow(),
+            timestamp=ctx.timestamp or datetime.now(timezone.utc),
             method_outputs=ctx.method_outputs,
             features=features,
             signal_rank=signal_rank,
@@ -65,6 +79,15 @@ class FeatureFusionAgent(BaseAgent):
             methods_skipped=skipped,
         )
         return ctx
+
+    def _technical_direction(self, ctx: PipelineContext) -> int:
+        if not ctx.chart:
+            return 0
+        if ctx.chart.trend_direction == "up":
+            return 1
+        if ctx.chart.trend_direction == "down":
+            return -1
+        return 0
 
     def _apply_to_scores(self, output, scores: LayerScores) -> None:
         f = output.features
@@ -78,7 +101,7 @@ class FeatureFusionAgent(BaseAgent):
                 scores.elliott = output.confidence
         elif m == "fibonacci_spiral":
             scores.fibonacci = output.confidence
-        elif m == "level_369" or m == "ancient_number":
+        elif m in ("level_369", "ancient_number"):
             scores.number_zone = max(scores.number_zone, output.confidence)
         elif m == "fractal":
             scores.fractal = output.confidence
