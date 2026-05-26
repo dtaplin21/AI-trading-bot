@@ -66,8 +66,7 @@ CREATE INDEX IF NOT EXISTS idx_news_published ON news_events (published_at DESC)
 CREATE TABLE IF NOT EXISTS symbol_news_impacts (
     news_event_id   TEXT NOT NULL,
     symbol          TEXT NOT NULL,
-    impact_score    DOUBLE PRECISION,
-    direction_bias  INT,
-    relevance       DOUBLE PRECISION,
+    impact_direction INT,
+    confidence      DOUBLE PRECISION,
     PRIMARY KEY (news_event_id, symbol)
 );

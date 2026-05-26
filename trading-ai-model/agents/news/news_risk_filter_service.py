@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from agents.news.economic_calendar_service import EconomicCalendarService
-from agents.news.news_schemas import NewsEvent, NewsFeatures
+from agents.news.news_schemas import EventType, NewsEvent, NewsFeatures, NewsMode
 
 
 class NewsRiskFilterService:
@@ -23,57 +23,70 @@ class NewsRiskFilterService:
         at: Optional[datetime] = None,
     ) -> NewsFeatures:
         sym = symbol.upper()
+        now = at or datetime.now(timezone.utc)
         symbol_events = [
             e
             for e in recent_events
-            if sym in [s.upper() for s in e.symbols_affected] or not e.symbols_affected
+            if sym in [s.upper() for s in e.symbols_affected]
+            or (not e.symbols_affected and e.news_mode == NewsMode.RISK_EVENT)
         ]
 
+        blocked, block_reason = self._calendar.is_trading_blocked(sym)
+        size_red = self._calendar.get_size_reduction_factor(sym)
+        manual = self._calendar.requires_manual_approval(sym)
+        minutes_until = self._calendar.minutes_until_next_event(sym)
+
         if not symbol_events:
-            blocked, reason = self._calendar.is_trading_blocked(sym)
             return NewsFeatures(
-                symbol=sym,
                 news_trading_blocked=blocked,
-                news_size_reduction=self._calendar.get_size_reduction_factor(sym),
-                news_requires_manual_approval=self._calendar.requires_manual_approval(sym),
-                news_headline_summary=reason or "No recent news",
+                reduce_size_recommended=size_red < 1.0,
+                manual_approval_required=manual,
+                news_risk_reason=block_reason or "No recent news",
+                minutes_until_next_event=minutes_until,
+                affected_symbol_match=False,
             )
 
+        latest = max(symbol_events, key=lambda e: e.published_at)
         sentiment = sum(e.sentiment_score for e in symbol_events) / len(symbol_events)
         impact = max(e.impact_score for e in symbol_events)
         urgency = max(e.urgency_score for e in symbol_events)
-        high_impact = sum(1 for e in symbol_events if e.impact_score >= 0.60)
+        volatility = max(e.volatility_score for e in symbol_events)
+
+        published = latest.published_at
+        if published.tzinfo is None:
+            published = published.replace(tzinfo=timezone.utc)
+        minutes_since = (now - published).total_seconds() / 60
 
         news_direction = 1 if sentiment > 0.15 else (-1 if sentiment < -0.15 else 0)
-        alignment = 1.0 if technical_direction == 0 or news_direction == 0 else (
-            1.0 if news_direction == technical_direction else -0.5
-        )
+        conflict = 0.0
+        if technical_direction != 0 and news_direction != 0 and news_direction != technical_direction:
+            conflict = min(1.0, abs(sentiment) * impact)
 
-        blocked, reason = self._calendar.is_trading_blocked(sym)
-        size_red = self._calendar.get_size_reduction_factor(sym)
-        manual = self._calendar.requires_manual_approval(sym)
+        high_impact = any(e.impact_score >= 0.60 for e in symbol_events)
+        breaking = any(e.news_mode == NewsMode.RISK_EVENT for e in symbol_events)
 
-        risk_penalty = 0.0
-        if blocked:
-            risk_penalty = 1.0
-        elif size_red < 1.0:
-            risk_penalty = 1.0 - size_red
-        risk_penalty = max(risk_penalty, urgency * impact * 0.5)
-
-        top = sorted(symbol_events, key=lambda e: e.impact_score, reverse=True)[:2]
-        summary = "; ".join(e.headline[:60] for e in top)
+        if latest.trade_action == "block":
+            blocked = True
+            block_reason = block_reason or latest.headline[:80]
+        elif latest.trade_action == "manual_approval":
+            manual = True
 
         return NewsFeatures(
-            symbol=sym,
             news_sentiment_score=sentiment,
             news_impact_score=impact,
             news_urgency_score=urgency,
-            news_direction_alignment=alignment,
-            news_risk_penalty=risk_penalty,
-            news_event_count_2h=len(symbol_events),
-            news_high_impact_count=high_impact,
-            news_trading_blocked=blocked,
-            news_size_reduction=size_red,
-            news_requires_manual_approval=manual,
-            news_headline_summary=summary or reason,
+            volatility_risk_score=volatility,
+            minutes_since_last_news=minutes_since,
+            minutes_until_next_event=minutes_until,
+            high_impact_news_active=high_impact,
+            breaking_news_active=breaking,
+            affected_symbol_match=True,
+            news_conflict_score=conflict,
+            trading_blocked=blocked,
+            reduce_size_recommended=size_red < 1.0 or latest.trade_action == "reduce_size",
+            manual_approval_required=manual,
+            news_risk_reason=block_reason or latest.explanation,
+            latest_headline=latest.headline,
+            latest_event_type=latest.event_type.value,
+            latest_sentiment_label=latest.sentiment_label.value,
         )

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
-from typing import Optional
 
 from agents.news.news_schemas import (
     EventType,
@@ -14,6 +12,7 @@ from agents.news.news_schemas import (
     NewsMode,
     RawNewsItem,
     SentimentLabel,
+    VolatilityRisk,
 )
 
 logger = logging.getLogger(__name__)
@@ -25,17 +24,16 @@ CRITICAL_WORDS = ("emergency", "halt", "crash", "bank failure", "sanctions", "in
 
 
 class NewsSentimentService:
-    """Classifies raw items into scored NewsEvents. Optional LLM enhancement."""
+    """Classifies raw items into scored NewsEvents."""
 
     def __init__(self, use_llm: bool = False):
         self.use_llm = use_llm
 
     async def classify_batch(self, items: list[RawNewsItem]) -> list[NewsEvent]:
-        tasks = [self._classify_one(item) for item in items]
-        return await asyncio.gather(*tasks)
+        return await asyncio.gather(*[self._classify_one(item) for item in items])
 
     async def _classify_one(self, item: RawNewsItem) -> NewsEvent:
-        text = f"{item.headline} {item.summary} {item.raw_text}".lower()
+        text = f"{item.headline} {item.summary or ''} {item.raw_payload}".lower()
 
         sentiment_score = self._sentiment_score(text)
         sentiment_label = self._sentiment_label(sentiment_score)
@@ -43,6 +41,8 @@ class NewsSentimentService:
         impact_level, impact_score = self._impact(text)
         urgency = self._urgency(text, impact_score)
         mode = self._mode(event_type, impact_score, urgency)
+        volatility_score, volatility_risk = self._volatility(impact_score, event_type, urgency)
+        trade_action = self._trade_action(mode, impact_score, impact_level)
 
         return NewsEvent(
             source=item.source,
@@ -54,10 +54,14 @@ class NewsSentimentService:
             impact_level=impact_level,
             impact_score=impact_score,
             urgency_score=urgency,
+            volatility_score=volatility_score,
             sentiment_score=sentiment_score,
             sentiment_label=sentiment_label,
+            volatility_risk=volatility_risk,
             news_mode=mode,
-            keywords=self._keywords(text),
+            trade_action=trade_action,
+            asset_classes=["equity_index"] if "s&p" in text or "futures" in text else [],
+            explanation=f"{event_type.value} headline classified as {sentiment_label.value}",
         )
 
     def _sentiment_score(self, text: str) -> float:
@@ -75,19 +79,29 @@ class NewsSentimentService:
         return SentimentLabel.NEUTRAL
 
     def _event_type(self, text: str) -> EventType:
-        if any(w in text for w in ("cpi", "inflation")):
+        if "cpi" in text:
             return EventType.CPI
+        if "ppi" in text:
+            return EventType.PPI
         if any(w in text for w in ("nonfarm", "nfp", "jobs report", "payroll")):
             return EventType.NFP
-        if any(w in text for w in ("fed", "fomc", "powell", "rate hike", "rate cut")):
-            return EventType.FED
+        if "fomc" in text:
+            return EventType.FOMC
+        if any(w in text for w in ("fed", "powell", "rate hike", "rate cut")):
+            return EventType.FED_POLICY
+        if "gdp" in text:
+            return EventType.GDP
         if any(w in text for w in ("war", "sanction", "geopolit")):
             return EventType.GEOPOLITICAL
         if "earnings" in text:
             return EventType.EARNINGS
+        if "inflation" in text:
+            return EventType.INFLATION
         if any(w in text for w in CRITICAL_WORDS):
             return EventType.BREAKING
-        return EventType.GENERAL
+        if any(w in text for w in ("futures", "market", "stocks", "index")):
+            return EventType.GENERAL_MARKET
+        return EventType.UNKNOWN
 
     def _impact(self, text: str) -> tuple[ImpactLevel, float]:
         if any(w in text for w in CRITICAL_WORDS):
@@ -107,9 +121,29 @@ class NewsSentimentService:
         if event_type == EventType.BREAKING or (impact >= 0.85 and urgency >= 0.75):
             return NewsMode.RISK_EVENT
         if impact >= 0.50:
-            return NewsMode.DIRECTIONAL
+            return NewsMode.CONTEXTUAL
         return NewsMode.INFORMATIONAL
 
-    def _keywords(self, text: str) -> list[str]:
-        found = [w for w in HIGH_IMPACT_WORDS + BULLISH_WORDS + BEARISH_WORDS if w in text]
-        return list(dict.fromkeys(found))[:10]
+    def _volatility(
+        self, impact: float, event_type: EventType, urgency: float
+    ) -> tuple[float, VolatilityRisk]:
+        boost = 0.15 if event_type in (EventType.FOMC, EventType.CPI, EventType.NFP, EventType.BREAKING) else 0.0
+        score = min(1.0, impact * 0.7 + urgency * 0.3 + boost)
+        if score >= 0.85:
+            return score, VolatilityRisk.EXTREME
+        if score >= 0.65:
+            return score, VolatilityRisk.HIGH
+        if score >= 0.40:
+            return score, VolatilityRisk.MEDIUM
+        return score, VolatilityRisk.LOW
+
+    def _trade_action(self, mode: NewsMode, impact: float, level: ImpactLevel) -> str:
+        if mode == NewsMode.RISK_EVENT:
+            return "block"
+        if level == ImpactLevel.CRITICAL:
+            return "manual_approval"
+        if impact >= 0.55:
+            return "reduce_size"
+        if impact >= 0.40:
+            return "risk_filter"
+        return "none"

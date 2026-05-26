@@ -24,11 +24,15 @@ FEATURE_KEYS = [
     "news_sentiment_score",
     "news_impact_score",
     "news_urgency_score",
-    "news_direction_alignment",
-    "news_risk_penalty",
-    "news_event_count_2h",
-    "news_high_impact_count",
-    "news_size_reduction",
+    "volatility_risk_score",
+    "news_conflict_score",
+    "minutes_since_last_news",
+    "minutes_until_next_event",
+    "high_impact_news_active",
+    "breaking_news_active",
+    "affected_symbol_match",
+    "trading_blocked",
+    "reduce_size_recommended",
 ]
 
 

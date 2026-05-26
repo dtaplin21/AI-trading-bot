@@ -44,8 +44,13 @@ class FeatureFusionAgent(BaseAgent):
         news_features = self.news.get_news_features(ctx.symbol, tech_dir)
         ctx.metadata["news_features"] = news_features.model_dump()
         for key, val in news_features.model_dump().items():
-            if key != "symbol":
-                features[f"news_{key}" if not key.startswith("news_") else key] = val
+            features[key if key.startswith("news_") or key in ("trading_blocked", "volatility_risk_score") else f"news_{key}"] = val
+            if key == "trading_blocked":
+                features["news_trading_blocked"] = val
+            if key == "reduce_size_recommended":
+                features["news_reduce_size_recommended"] = val
+            if key == "manual_approval_required":
+                features["news_manual_approval_required"] = val
 
         features["near_666_level"] = features.get("ancient_number_number_zone") == "66.6%"
         features["near_618_fib"] = features.get("fibonacci_spiral_near_618_fib", False)
@@ -62,7 +67,13 @@ class FeatureFusionAgent(BaseAgent):
         features["risk_of_ruin"] = features.get("strategy_math_risk_of_ruin", 0.0)
 
         signal_rank = self.rank_service.compute_rank(scores)
-        penalty = float(news_features.news_risk_penalty)
+        penalty = news_features.volatility_risk_score * news_features.news_impact_score
+        if news_features.trading_blocked:
+            penalty = 1.0
+        elif news_features.reduce_size_recommended:
+            penalty = max(penalty, 0.35)
+        if news_features.news_conflict_score > 0.5:
+            penalty = max(penalty, news_features.news_conflict_score * 0.5)
         if penalty > 0:
             signal_rank = int(max(0, signal_rank - penalty * 15))
         features["signal_rank"] = signal_rank

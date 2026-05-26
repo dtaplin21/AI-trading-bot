@@ -1,31 +1,60 @@
-"""News intelligence schemas."""
+"""
+agents/news/news_schemas.py
 
+All Pydantic v2 schemas for the Market News Intelligence Agent.
+These integrate directly into FusedFeatureSet via the NewsFeatures block.
+"""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, Field
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+# ─── Enums ────────────────────────────────────────────────────────────────────
+
+class NewsSource(str, Enum):
+    FINNHUB = "finnhub"
+    BENZINGA = "benzinga"
+    POLYGON = "polygon"
+    FMP = "financial_modeling_prep"
+    NEWSAPI = "newsapi"
+    MARKETAUX = "marketaux"
+    ALPHA_VANTAGE = "alpha_vantage"
+    RSS = "rss"
+    FRED = "fred"
+    BLS = "bls"
+    FEDERAL_RESERVE = "federal_reserve"
+    EIA = "eia"
+    TREASURY = "treasury"
+
+
 class EventType(str, Enum):
-    MACRO = "macro"
+    CPI = "cpi"
+    PPI = "ppi"
+    FOMC = "fomc"
+    NFP = "nonfarm_payrolls"
+    GDP = "gdp"
+    FED_SPEECH = "fed_speech"
+    JOBLESS_CLAIMS = "jobless_claims"
+    OIL_INVENTORY = "oil_inventory"
+    TREASURY_YIELD = "treasury_yield"
     EARNINGS = "earnings"
     GEOPOLITICAL = "geopolitical"
-    FED = "fed"
-    CPI = "cpi"
-    NFP = "nfp"
+    FED_POLICY = "fed_policy"
+    INFLATION = "inflation"
+    EMPLOYMENT = "employment"
+    GENERAL_MARKET = "general_market"
+    CONTRACT_EXPIRY = "contract_expiry"
     BREAKING = "breaking"
-    SECTOR = "sector"
-    GENERAL = "general"
-
-
-class ImpactLevel(str, Enum):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-    CRITICAL = "critical"
+    ANALYST = "analyst"
+    UNKNOWN = "unknown"
 
 
 class SentimentLabel(str, Enum):
@@ -35,77 +64,140 @@ class SentimentLabel(str, Enum):
     MIXED = "mixed"
 
 
+class VolatilityRisk(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    EXTREME = "extreme"
+
+
 class NewsMode(str, Enum):
     INFORMATIONAL = "informational"
-    DIRECTIONAL = "directional"
+    CONTEXTUAL = "contextual"
     RISK_EVENT = "risk_event"
 
 
-class RawNewsItem(BaseModel):
-    source: str
-    headline: str
-    summary: str = ""
-    url: str = ""
-    published_at: datetime
-    raw_text: str = ""
+class ImpactLevel(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
 
+
+# ─── Raw ingested article ──────────────────────────────────────────────────────
+
+class RawNewsItem(BaseModel):
+    """Raw item as it arrives from any source before processing."""
+    source: NewsSource
+    headline: str
+    summary: Optional[str] = None
+    url: Optional[str] = None
+    published_at: datetime
+    raw_payload: dict = Field(default_factory=dict)
+
+
+# ─── Processed news event ─────────────────────────────────────────────────────
 
 class NewsEvent(BaseModel):
-    id: str = ""
-    source: str
+    """Fully processed news event. Stored in news_events table."""
+    id: Optional[str] = None
+    source: NewsSource
     headline: str
-    summary: str = ""
-    url: str = ""
+    summary: Optional[str] = None
+    url: Optional[str] = None
     published_at: datetime
-    event_type: EventType = EventType.GENERAL
-    impact_level: ImpactLevel = ImpactLevel.LOW
-    impact_score: float = Field(0.0, ge=0.0, le=1.0)
-    urgency_score: float = Field(0.0, ge=0.0, le=1.0)
-    sentiment_score: float = Field(0.0, ge=-1.0, le=1.0)
-    sentiment_label: SentimentLabel = SentimentLabel.NEUTRAL
+    created_at: datetime = Field(default_factory=_utc_now)
+
+    event_type: EventType = EventType.UNKNOWN
     news_mode: NewsMode = NewsMode.INFORMATIONAL
+
     symbols_affected: list[str] = Field(default_factory=list)
-    keywords: list[str] = Field(default_factory=list)
+    asset_classes: list[str] = Field(default_factory=list)
 
-
-class SymbolNewsImpact(BaseModel):
-    news_event_id: str = ""
-    symbol: str
+    sentiment_score: float = 0.0
     impact_score: float = 0.0
-    direction_bias: int = 0  # +1 bull, -1 bear, 0 neutral
-    relevance: float = 0.0
+    urgency_score: float = 0.0
+    volatility_score: float = 0.0
 
+    sentiment_label: SentimentLabel = SentimentLabel.NEUTRAL
+    volatility_risk: VolatilityRisk = VolatilityRisk.LOW
+    impact_level: ImpactLevel = ImpactLevel.LOW
+
+    trade_action: str = "none"
+    explanation: str = ""
+
+
+# ─── Economic calendar event ──────────────────────────────────────────────────
 
 class EconomicEvent(BaseModel):
-    name: str
+    """Scheduled macro event from economic calendar."""
+    id: Optional[str] = None
+    event_name: str
+    event_type: EventType
     scheduled_at: datetime
-    impact: ImpactLevel = ImpactLevel.HIGH
-    symbols: list[str] = Field(default_factory=list)
-    block_minutes_before: int = 15
-    block_minutes_after: int = 30
-    size_reduction: float = 0.5
+    actual_value: Optional[float] = None
+    forecast_value: Optional[float] = None
+    previous_value: Optional[float] = None
+    surprise_pct: Optional[float] = None
+    impact_level: ImpactLevel = ImpactLevel.LOW
+    affected_symbols: list[str] = Field(default_factory=list)
+    country: str = "US"
+    source: NewsSource = NewsSource.FRED
+    created_at: datetime = Field(default_factory=_utc_now)
 
+
+# ─── News risk window ──────────────────────────────────────────────────────────
 
 class NewsRiskWindow(BaseModel):
-    symbol: str
-    reason: str
+    """Active trading restriction window around a news event."""
+    id: Optional[str] = None
+    event_name: str
+    event_type: EventType
     starts_at: datetime
     ends_at: datetime
-    block_trading: bool = False
-    size_reduction: float = 1.0
-    requires_manual_approval: bool = False
+    affected_symbols: list[str] = Field(default_factory=list)
+    risk_level: VolatilityRisk = VolatilityRisk.LOW
+    trading_allowed: bool = True
+    reduce_size: bool = False
+    require_manual: bool = False
+    reason: str = ""
+    created_at: datetime = Field(default_factory=_utc_now)
 
+
+# ─── Symbol news impact ────────────────────────────────────────────────────────
+
+class SymbolNewsImpact(BaseModel):
+    """Per-symbol impact record."""
+    id: Optional[str] = None
+    news_event_id: str
+    symbol: str
+    impact_direction: int = 0
+    confidence: float = 0.0
+    created_at: datetime = Field(default_factory=_utc_now)
+
+
+# ─── News features fed to FeatureFusion ───────────────────────────────────────
 
 class NewsFeatures(BaseModel):
-    symbol: str
+    """Structured feature block for Feature Fusion Agent."""
     news_sentiment_score: float = 0.0
     news_impact_score: float = 0.0
     news_urgency_score: float = 0.0
-    news_direction_alignment: float = 0.0
-    news_risk_penalty: float = 0.0
-    news_event_count_2h: int = 0
-    news_high_impact_count: int = 0
-    news_trading_blocked: bool = False
-    news_size_reduction: float = 1.0
-    news_requires_manual_approval: bool = False
-    news_headline_summary: str = ""
+    volatility_risk_score: float = 0.0
+
+    minutes_since_last_news: float = 9999.0
+    minutes_until_next_event: float = 9999.0
+
+    high_impact_news_active: bool = False
+    breaking_news_active: bool = False
+    affected_symbol_match: bool = False
+    news_conflict_score: float = 0.0
+
+    trading_blocked: bool = False
+    reduce_size_recommended: bool = False
+    manual_approval_required: bool = False
+    news_risk_reason: str = ""
+
+    latest_headline: Optional[str] = None
+    latest_event_type: str = "none"
+    latest_sentiment_label: str = "neutral"

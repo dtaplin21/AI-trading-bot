@@ -11,11 +11,10 @@ from xml.etree import ElementTree
 
 import httpx
 
-from agents.news.news_schemas import RawNewsItem
+from agents.news.news_schemas import NewsSource, RawNewsItem
 
 logger = logging.getLogger(__name__)
 
-# Public RSS feeds — no API key required for development
 DEFAULT_FEEDS = [
     ("Reuters Business", "https://feeds.reuters.com/reuters/businessNews"),
     ("CNBC Top", "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114"),
@@ -59,17 +58,17 @@ class NewsIngestionService:
         try:
             resp = await self._client.get(url)
             resp.raise_for_status()
-            return self._parse_rss(source, resp.text)
+            return self._parse_rss(source, url, resp.text)
         except Exception as exc:
             logger.debug("Feed %s unavailable: %s", source, exc)
             return self._mock_items(source)
 
-    def _parse_rss(self, source: str, xml_text: str) -> list[RawNewsItem]:
+    def _parse_rss(self, source_name: str, url: str, xml_text: str) -> list[RawNewsItem]:
         items: list[RawNewsItem] = []
         try:
             root = ElementTree.fromstring(xml_text)
         except ElementTree.ParseError:
-            return self._mock_items(source)
+            return self._mock_items(source_name)
 
         for item in root.iter("item"):
             title = (item.findtext("title") or "").strip()
@@ -92,36 +91,35 @@ class NewsIngestionService:
 
             items.append(
                 RawNewsItem(
-                    source=source,
+                    source=NewsSource.RSS,
                     headline=title,
-                    summary=desc[:500],
-                    url=link,
+                    summary=desc[:500] or None,
+                    url=link or None,
                     published_at=published,
-                    raw_text=f"{title}. {desc}",
+                    raw_payload={"feed_name": source_name, "feed_url": url, "description": desc},
                 )
             )
             if len(items) >= 20:
                 break
-        return items or self._mock_items(source)
+        return items or self._mock_items(source_name)
 
-    def _mock_items(self, source: str) -> list[RawNewsItem]:
-        """Fallback when feeds are unreachable (sandbox/offline)."""
+    def _mock_items(self, source_name: str) -> list[RawNewsItem]:
         now = datetime.now(timezone.utc)
         return [
             RawNewsItem(
-                source=source,
+                source=NewsSource.RSS,
                 headline="Fed officials signal data-dependent rate path",
                 summary="Markets watch upcoming CPI release for policy clues.",
-                url=f"mock://{source}/1",
+                url=f"mock://{source_name}/1",
                 published_at=now,
-                raw_text="Fed officials signal data-dependent rate path. S&P futures steady.",
+                raw_payload={"feed_name": source_name, "mock": True},
             ),
             RawNewsItem(
-                source=source,
+                source=NewsSource.RSS,
                 headline="S&P 500 futures edge higher ahead of economic data",
                 summary="Index futures rise as traders await jobs report.",
-                url=f"mock://{source}/2",
+                url=f"mock://{source_name}/2",
                 published_at=now,
-                raw_text="S&P 500 futures edge higher ahead of economic data.",
+                raw_payload={"feed_name": source_name, "mock": True},
             ),
         ]

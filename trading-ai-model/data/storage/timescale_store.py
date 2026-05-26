@@ -78,9 +78,8 @@ SYMBOL_IMPACTS_DDL = """
 CREATE TABLE IF NOT EXISTS symbol_news_impacts (
     news_event_id   TEXT NOT NULL,
     symbol          TEXT NOT NULL,
-    impact_score    DOUBLE PRECISION,
-    direction_bias  INT,
-    relevance       DOUBLE PRECISION,
+    impact_direction INT,
+    confidence      DOUBLE PRECISION,
     PRIMARY KEY (news_event_id, symbol)
 );
 """
@@ -267,7 +266,7 @@ class TimescaleStore:
             rows.append(
                 (
                     e.id,
-                    e.source,
+                    e.source.value if hasattr(e.source, "value") else e.source,
                     e.headline,
                     e.summary,
                     e.url,
@@ -293,14 +292,13 @@ class TimescaleStore:
         if not self._available or not impacts:
             return 0
         sql = """
-            INSERT INTO symbol_news_impacts (news_event_id, symbol, impact_score, direction_bias, relevance)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO symbol_news_impacts (news_event_id, symbol, impact_direction, confidence)
+            VALUES (%s, %s, %s, %s)
             ON CONFLICT (news_event_id, symbol) DO UPDATE SET
-                impact_score = EXCLUDED.impact_score,
-                direction_bias = EXCLUDED.direction_bias,
-                relevance = EXCLUDED.relevance
+                impact_direction = EXCLUDED.impact_direction,
+                confidence = EXCLUDED.confidence
         """
-        rows = [(i.news_event_id, i.symbol, i.impact_score, i.direction_bias, i.relevance) for i in impacts]
+        rows = [(i.news_event_id, i.symbol, i.impact_direction, i.confidence) for i in impacts]
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.executemany(sql, rows)

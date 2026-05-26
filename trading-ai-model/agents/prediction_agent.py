@@ -44,7 +44,7 @@ class PredictionAgent(BaseAgent):
             rank < 50
             or ror > 0.1
             or f.get("momentum_momentum_score", 0.5) < 0.2
-            or bool(f.get("news_news_trading_blocked") or f.get("news_trading_blocked"))
+            or bool(f.get("news_trading_blocked") or f.get("trading_blocked"))
         )
 
         ctx.prediction = PredictionOutput(

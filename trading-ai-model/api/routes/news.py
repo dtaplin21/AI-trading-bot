@@ -1,10 +1,10 @@
 """News intelligence API routes."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Query
 
-from agents.news.news_schemas import EconomicEvent, ImpactLevel
+from agents.news.news_schemas import EconomicEvent, EventType, ImpactLevel, NewsSource
 from agents.news_runtime import get_news_agent
 
 router = APIRouter()
@@ -45,15 +45,16 @@ def add_calendar_event(
     symbol: str = "MES",
     hours_from_now: float = 2,
     impact: ImpactLevel = ImpactLevel.HIGH,
+    event_type: EventType = EventType.GENERAL_MARKET,
 ):
-    from datetime import timedelta
-
     agent = get_news_agent()
     event = EconomicEvent(
-        name=name,
+        event_name=name,
+        event_type=event_type,
         scheduled_at=datetime.now(timezone.utc) + timedelta(hours=hours_from_now),
-        impact=impact,
-        symbols=[symbol.upper()],
+        impact_level=impact,
+        affected_symbols=[symbol.upper()],
+        source=NewsSource.FRED,
     )
     agent.add_economic_event(event)
     return {"added": event.model_dump()}
