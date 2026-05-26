@@ -68,7 +68,7 @@ class NewsRiskFilterService:
         if latest.trade_action == "block":
             blocked = True
             block_reason = block_reason or latest.headline[:80]
-        elif latest.trade_action == "manual_approval":
+        elif latest.trade_action in ("manual_approval", "risk_filter"):
             manual = True
 
         return NewsFeatures(

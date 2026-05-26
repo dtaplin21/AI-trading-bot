@@ -54,6 +54,17 @@ class Settings(BaseSettings):
     news_polling_interval_seconds: int = 60
     news_load_default_calendar: bool = False
 
+    # News API keys (optional — RSS + FRED public demo work without keys)
+    finnhub_api_key: str = ""
+    benzinga_api_key: str = ""
+    polygon_api_key: str = ""
+    fmp_api_key: str = ""
+    newsapi_key: str = ""
+    marketaux_api_key: str = ""
+    alpha_vantage_key: str = ""
+    fred_api_key: str = ""
+    eia_api_key: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:
