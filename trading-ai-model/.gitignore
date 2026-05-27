@@ -1,9 +1,8 @@
-# Local overrides
-data/cache/
-data/parquet/
-*.parquet
-mlruns/
-experiments/
-models/candidate_*.txt
-models/*.meta.json
-logs/
+# Python backend
+backend/.venv/
+backend/.pytest_cache/
+backend/**/*.egg-info/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
