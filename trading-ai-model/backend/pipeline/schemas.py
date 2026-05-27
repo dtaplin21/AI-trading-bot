@@ -251,8 +251,17 @@ class BalanceLineOutput(MethodOutput):
     method: str = "balance_line"
     balance_price: Optional[float] = None
     above_balance: bool = False
+    at_balance: bool = False
     distance_to_balance: float = 0.0
     balance_slope: float = 0.0
+
+
+class AncientNumberOutput(MethodOutput):
+    method: str = "ancient_number"
+    number_zone: Optional[str] = None
+    mirror_target: Optional[float] = None
+    active_cycles: list[str] = Field(default_factory=list)
+    level_active: bool = False
 
 
 # ─── News Intelligence (MarketNewsAgent) ─────────────────────────────────────

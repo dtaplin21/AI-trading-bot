@@ -15,6 +15,7 @@ from agents.schemas import MethodOutput
 from pipeline.schemas import (
     Agent369Output,
     AgentStatus,
+    AncientNumberOutput,
     BalanceLineOutput,
     CandlestickOutput,
     ChartStructure,
@@ -263,11 +264,36 @@ def monte_carlo_from(o: Optional[MethodOutput]) -> Optional[MonteCarloOutput]:
 def balance_from(o: Optional[MethodOutput]) -> Optional[BalanceLineOutput]:
     if not o or o.skipped:
         return None
+    balance_price = _f(o, "balance_price") or _f(o, "balance_line")
+    if balance_price is None:
+        return None
+    at_balance = bool(_f(o, "at_balance_line"))
+    above_balance = bool(_f(o, "above_balance"))
+    distance = float(_f(o, "distance_to_balance", 0) or 0)
     return BalanceLineOutput(
         **_base_dict(o),
-        balance_price=_f(o, "balance_price"),
-        above_balance=bool(_f(o, "above_balance")),
-        distance_to_balance=float(_f(o, "distance_to_balance", 0) or 0),
+        balance_price=float(balance_price),
+        above_balance=above_balance,
+        at_balance=at_balance,
+        distance_to_balance=distance,
+    )
+
+
+def ancient_number_from(o: Optional[MethodOutput]) -> Optional[AncientNumberOutput]:
+    if not o or o.skipped:
+        return None
+    cycles = _f(o, "active_cycles") or []
+    if not isinstance(cycles, list):
+        cycles = [str(cycles)] if cycles else []
+    number_zone = _f(o, "number_zone")
+    level_active = bool(cycles) or number_zone is not None
+    mirror = _f(o, "mirror_target")
+    return AncientNumberOutput(
+        **_base_dict(o),
+        number_zone=str(number_zone) if number_zone else None,
+        mirror_target=float(mirror) if mirror is not None else None,
+        active_cycles=[str(c) for c in cycles],
+        level_active=level_active,
     )
 
 
@@ -292,4 +318,5 @@ def prepare_confluence_inputs(
         "strategy": strategy_from(outputs.get("strategy_math")),
         "monte_carlo": monte_carlo_from(outputs.get("monte_carlo")),
         "balance": balance_from(outputs.get("balance_line")),
+        "ancient_number": ancient_number_from(outputs.get("ancient_number")),
     }

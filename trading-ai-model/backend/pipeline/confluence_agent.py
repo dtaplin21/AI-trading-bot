@@ -35,6 +35,7 @@ from config.agent_config import METHOD_WEIGHTS, TRADING_PHILOSOPHY
 from pipeline.confluence_report import ConfluenceReport, MethodCluster, MethodVote
 from pipeline.schemas import (
     Agent369Output,
+    AncientNumberOutput,
     BalanceLineOutput,
     CandlestickOutput,
     ChartStructure,
@@ -57,6 +58,8 @@ MIN_METHODS_FOR_SIGNAL = int(TRADING_PHILOSOPHY["confluence_minimum_methods"])
 MIN_CONFLUENCE_SCORE = 0.35  # Below this = not worth scoring
 CONFLICT_THRESHOLD = float(TRADING_PHILOSOPHY["max_conflict_score"])
 GANN_MAX_WEIGHT = 0.02  # Hard cap regardless of config
+STRATEGY_MIN_SAMPLE = 10
+MONTE_CARLO_DIR_THRESHOLD = 0.05  # prob must exceed 0.5±this to vote direction
 
 
 class ConfluenceAgent:
@@ -93,6 +96,7 @@ class ConfluenceAgent:
         strategy: Optional[StrategyMathOutput] = None,
         monte_carlo: Optional[MonteCarloOutput] = None,
         balance: Optional[BalanceLineOutput] = None,
+        ancient_number: Optional[AncientNumberOutput] = None,
     ) -> ConfluenceReport:
         """
         Core method. Produces one ConfluenceReport from all inputs.
@@ -116,6 +120,10 @@ class ConfluenceAgent:
             fractal,
             markov,
             momentum,
+            strategy,
+            monte_carlo,
+            balance,
+            ancient_number,
         )
 
         voted = [v for v in raw_votes if v is not None]
@@ -161,12 +169,10 @@ class ConfluenceAgent:
             conflict_score=conflict_score,
             news_conflict=news_conflict,
             news_blocked=news.trading_blocked,
-            strategy=strategy,
-            monte_carlo=monte_carlo,
         )
 
         # ── Step 9: Top signals for audit ─────────────────────────────────────
-        top_signals = self._extract_top_signals(proven_votes, strategy, news)
+        top_signals = self._extract_top_signals(proven_votes, news)
 
         # ── Step 10: Readiness check ──────────────────────────────────────────
         min_methods_met = (
@@ -236,6 +242,10 @@ class ConfluenceAgent:
         fractal: Optional[FractalOutput],
         markov: Optional[MarkovOutput],
         momentum: Optional[MomentumOutput],
+        strategy: Optional[StrategyMathOutput],
+        monte_carlo: Optional[MonteCarloOutput],
+        balance: Optional[BalanceLineOutput],
+        ancient_number: Optional[AncientNumberOutput],
     ) -> list[Optional[MethodVote]]:
         """Convert each method output into a MethodVote."""
         return [
@@ -248,6 +258,10 @@ class ConfluenceAgent:
             self._vote_fractal(fractal, symbol, timeframe, regime),
             self._vote_markov(markov, symbol, timeframe, regime),
             self._vote_momentum(momentum, symbol, timeframe, regime),
+            self._vote_balance(balance, symbol, timeframe, regime),
+            self._vote_ancient(ancient_number, symbol, timeframe, regime),
+            self._vote_strategy(strategy, symbol, timeframe, regime),
+            self._vote_monte_carlo(monte_carlo, symbol, timeframe, regime),
         ]
 
     def _make_vote(
@@ -404,6 +418,63 @@ class ConfluenceAgent:
         )
         return self._make_vote("momentum", direction, confidence, feature, sym, tf, reg)
 
+    def _vote_balance(
+        self, m: Optional[BalanceLineOutput], sym: str, tf: str, reg: str
+    ) -> Optional[MethodVote]:
+        if not m or m.status.value == "error":
+            return None
+        if m.balance_price is None or m.at_balance:
+            return None
+        direction = +1 if m.above_balance else -1
+        confidence = min(1.0, m.confidence + m.distance_to_balance * 0.01)
+        feature = f"balance={m.balance_price:.2f} above={m.above_balance}"
+        return self._make_vote("balance_line", direction, confidence, feature, sym, tf, reg)
+
+    def _vote_ancient(
+        self, m: Optional[AncientNumberOutput], sym: str, tf: str, reg: str
+    ) -> Optional[MethodVote]:
+        if not m or not m.level_active:
+            return None
+        direction = 0  # zone confirmer — cycles/666 levels confirm, not direct
+        confidence = m.confidence
+        zone = m.number_zone or "cycles"
+        cycles = ",".join(m.active_cycles[:3]) if m.active_cycles else "none"
+        feature = f"ancient zone={zone} cycles=[{cycles}]"
+        return self._make_vote("ancient_number", direction, confidence, feature, sym, tf, reg)
+
+    def _vote_strategy(
+        self, m: Optional[StrategyMathOutput], sym: str, tf: str, reg: str
+    ) -> Optional[MethodVote]:
+        if not m or m.status.value == "error":
+            return None
+        if m.sample_size < STRATEGY_MIN_SAMPLE:
+            return None
+        ev = m.expected_value
+        if abs(ev) < 0.01:
+            return None
+        direction = +1 if ev > 0 else -1
+        confidence = min(1.0, m.win_rate * min(1.0, m.sample_size / 100.0))
+        feature = f"EV={'+' if ev > 0 else ''}{ev:.2f} wr={m.win_rate:.2f} n={m.sample_size}"
+        return self._make_vote("strategy_math", direction, confidence, feature, sym, tf, reg)
+
+    def _vote_monte_carlo(
+        self, m: Optional[MonteCarloOutput], sym: str, tf: str, reg: str
+    ) -> Optional[MethodVote]:
+        if not m or m.status.value == "error":
+            return None
+        prob = m.target_hit_prob
+        if prob > 0.5 + MONTE_CARLO_DIR_THRESHOLD:
+            direction = +1
+        elif prob < 0.5 - MONTE_CARLO_DIR_THRESHOLD:
+            direction = -1
+        else:
+            direction = 0
+        confidence = abs(prob - 0.5) * 2.0
+        if direction == 0 and confidence < 0.05:
+            return None
+        feature = f"mc prob={prob:.2f} target={m.target_hit_prob:.2f}"
+        return self._make_vote("monte_carlo", direction, confidence, feature, sym, tf, reg)
+
     # ─── Scoring helpers ──────────────────────────────────────────────────────
 
     def _compute_conflict(self, votes: list[MethodVote], consensus: float) -> float:
@@ -460,12 +531,11 @@ class ConfluenceAgent:
         conflict_score: float,
         news_conflict: float,
         news_blocked: bool,
-        strategy: Optional[StrategyMathOutput],
-        monte_carlo: Optional[MonteCarloOutput],
     ) -> float:
         """
         Overall confluence score 0.0–1.0.
-        High score = strong agreement, low conflict, positive EV.
+        High score = strong agreement, low conflict.
+        Strategy/monte_carlo contribute via weighted votes — no separate boosts.
         """
         if not proven_votes:
             return 0.0
@@ -473,19 +543,15 @@ class ConfluenceAgent:
         # Base: strength of consensus
         base = abs(weighted_consensus) * 0.50
 
-        # Boost: number of methods agreeing (capped)
+        # Boost: number of directional methods (capped)
         directional = [v for v in proven_votes if v.direction != 0]
         count_boost = min(0.20, len(directional) * 0.04)
 
-        # Boost: EV positive
-        ev_boost = 0.0
-        if strategy and strategy.expected_value > 0:
-            ev_boost = min(0.10, strategy.expected_value / 50.0)
-
-        # Boost: Monte Carlo target probability
-        mc_boost = 0.0
-        if monte_carlo and monte_carlo.target_hit_prob > 0.55:
-            mc_boost = (monte_carlo.target_hit_prob - 0.55) * 0.20
+        # Boost: zone confirmers active (fib, 369, ancient with dir=0)
+        zone_confirmers = [
+            v for v in proven_votes if v.direction == 0 and v.confidence >= 0.4
+        ]
+        zone_boost = min(0.10, len(zone_confirmers) * 0.03)
 
         # Penalty: conflict
         conflict_penalty = conflict_score * 0.30
@@ -497,7 +563,7 @@ class ConfluenceAgent:
         news_block_penalty = 0.50 if news_blocked else 0.0
 
         score = (
-            base + count_boost + ev_boost + mc_boost
+            base + count_boost + zone_boost
             - conflict_penalty - news_penalty - news_block_penalty
         )
         return max(0.0, min(1.0, round(score, 4)))
@@ -533,20 +599,17 @@ class ConfluenceAgent:
     def _extract_top_signals(
         self,
         votes: list[MethodVote],
-        strategy: Optional[StrategyMathOutput],
         news: NewsFeatures,
     ) -> list[str]:
         """Top 3 most influential signals for audit explanation."""
         signals: list[str] = []
         sorted_votes = sorted(
-            [v for v in votes if v.direction != 0],
-            key=lambda v: abs(v.weighted_score),
+            votes,
+            key=lambda v: abs(v.weighted_score) if v.direction != 0 else v.confidence * v.weight,
             reverse=True,
         )
         for v in sorted_votes[:3]:
             signals.append(v.key_feature)
-        if strategy and strategy.expected_value > 0:
-            signals.append(f"EV=+${strategy.expected_value:.2f}")
         if news.high_impact_news_active:
             headline = news.latest_headline[:40] if news.latest_headline else "high impact active"
             signals.append(f"news: {headline}")
