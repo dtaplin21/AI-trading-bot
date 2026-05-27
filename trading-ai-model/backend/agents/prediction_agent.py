@@ -19,6 +19,17 @@ class PredictionAgent(BaseAgent):
             ctx.prediction = PredictionOutput(should_wait=True, should_avoid=True)
             return ctx
 
+        if ctx.confluence and not ctx.confluence.ready_for_prediction:
+            ctx.prediction = PredictionOutput(
+                should_start=False,
+                should_stop=False,
+                should_wait=True,
+                should_avoid=ctx.confluence.news_trading_blocked,
+                model_confidence=ctx.confluence.confluence_score,
+                model_version="confluence_gate",
+            )
+            return ctx
+
         f = ctx.fused.features
         rank = ctx.fused.signal_rank
         ev = float(f.get("strategy_ev", 0))
@@ -45,6 +56,7 @@ class PredictionAgent(BaseAgent):
             or ror > 0.1
             or f.get("momentum_momentum_score", 0.5) < 0.2
             or bool(f.get("news_trading_blocked") or f.get("trading_blocked"))
+            or (ctx.confluence and ctx.confluence.conflict_score > 0.45)
         )
 
         ctx.prediction = PredictionOutput(

@@ -17,6 +17,7 @@ from agents.schemas import (
     RiskVerdict,
     TradePlan,
 )
+from pipeline.confluence_report import ConfluenceReport
 from risk.risk_engine import PortfolioState
 
 
@@ -29,6 +30,7 @@ class PipelineContext:
     swings: list[tuple[int, float]] = field(default_factory=list)
     chart: Optional[ChartStructure] = None
     method_outputs: list[MethodOutput] = field(default_factory=list)
+    confluence: Optional[ConfluenceReport] = None
     fused: Optional[FusedFeatures] = None
     prediction: Optional[PredictionOutput] = None
     trade_plan: Optional[TradePlan] = None

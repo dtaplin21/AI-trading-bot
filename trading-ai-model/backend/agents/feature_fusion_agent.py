@@ -52,8 +52,14 @@ class FeatureFusionAgent(BaseAgent):
             features["higher_lows"] = ctx.chart.higher_lows
 
         tech_dir = resolve_technical_direction(ctx)
-        news_features = fetch_news_features(self.news, ctx.symbol, tech_dir, ctx.timestamp)
-        ctx.metadata["news_features"] = news_features.model_dump()
+        news_raw = ctx.metadata.get("news_features")
+        if news_raw:
+            from agents.news.news_schemas import NewsFeatures
+
+            news_features = NewsFeatures(**news_raw)
+        else:
+            news_features = fetch_news_features(self.news, ctx.symbol, tech_dir, ctx.timestamp)
+            ctx.metadata["news_features"] = news_features.model_dump()
         inject_news_into_features_dict(features, news_features)
 
         features["near_666_level"] = features.get("ancient_number_number_zone") == "66.6%"
@@ -72,6 +78,23 @@ class FeatureFusionAgent(BaseAgent):
 
         signal_rank = self.rank_service.compute_rank(scores)
         signal_rank = apply_news_signal_rank_penalty(signal_rank, news_features)
+
+        if ctx.confluence:
+            c = ctx.confluence
+            features["confluence_score"] = c.confluence_score
+            features["consensus_direction"] = c.consensus_direction
+            features["conflict_score"] = c.conflict_score
+            features["methods_bullish"] = c.bullish_count
+            features["methods_bearish"] = c.bearish_count
+            features["ready_for_prediction"] = c.ready_for_prediction
+            features["probability_statement"] = c.probability_statement
+            confluence_boost = int(c.confluence_score * 15)
+            if c.news_aligned:
+                confluence_boost += 2
+            if c.conflict_score > 0.35:
+                confluence_boost -= 5
+            signal_rank = max(0, min(100, signal_rank + confluence_boost))
+
         features["signal_rank"] = signal_rank
 
         skipped = sum(1 for o in ctx.method_outputs if o.skipped)

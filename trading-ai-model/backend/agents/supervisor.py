@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
+from agents.confluence_agent import ConfluenceAgentRunner
 from agents.audit_agent import AuditAgent
 from agents.chart_reading_agent import ChartReadingAgent
 from agents.execution_agent import ExecutionAgent
@@ -39,6 +40,7 @@ class TradingSupervisor:
         self.market_data = MarketDataAgent()
         self.chart_reading = ChartReadingAgent()
         self.method_runner = MethodAnalysisRunner()
+        self.confluence = ConfluenceAgentRunner(news_agent=self.news)
         self.feature_fusion = FeatureFusionAgent(news_agent=self.news)
         self.prediction = PredictionAgent()
         self.trade_planning = TradePlanningAgent()
@@ -86,28 +88,31 @@ class TradingSupervisor:
         if not ctx.metadata.get("all_methods_ran"):
             ctx.metadata["pipeline_halted"] = "incomplete_method_review"
 
-        # 4. Feature Fusion
+        # 4. Confluence — world state brain (all methods → one report)
+        ctx = self.confluence.run(ctx)
+
+        # 5. Feature Fusion
         ctx = self.feature_fusion.run(ctx)
 
-        # 5. Prediction
+        # 6. Prediction
         ctx = self.prediction.run(ctx)
 
-        # 6. Trade Planning (MCTS)
+        # 7. Trade Planning (MCTS)
         ctx = self.trade_planning.run(ctx)
 
-        # 7. Risk Agent (veto gate)
+        # 8. Risk Agent (veto gate)
         ctx = self.risk.run(ctx)
 
-        # 8. Execution (only if approved and execute=True)
+        # 9. Execution (only if approved and execute=True)
         if execute and ctx.risk and ctx.risk.approved:
             ctx = self.execution.run(ctx)
         else:
             ctx.execution = None
 
-        # 9. Learning (always log)
+        # 10. Learning (always log)
         ctx = self.learning.run(ctx)
 
-        # 10. Audit / Explainability
+        # 11. Audit / Explainability
         ctx = self.audit.run(ctx)
 
         return ctx.to_decision()
