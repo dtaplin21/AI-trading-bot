@@ -5,12 +5,22 @@ from __future__ import annotations
 import json
 import logging
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Generator, Optional
 
 import pandas as pd
 
 from config.settings import get_settings
+from data.storage.news_repository import (
+    NEWS_EVENTS_V2_COLUMNS,
+    NEWS_TABLES_DDL,
+    economic_event_row,
+    news_event_insert_row,
+    news_features_row,
+    risk_window_row,
+    row_to_economic_event,
+    row_to_risk_window,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,22 +65,27 @@ CREATE TABLE IF NOT EXISTS model_registry (
 
 NEWS_EVENTS_DDL = """
 CREATE TABLE IF NOT EXISTS news_events (
-    id              TEXT PRIMARY KEY,
-    source          TEXT NOT NULL,
-    headline        TEXT NOT NULL,
-    summary         TEXT,
-    url             TEXT,
-    published_at    TIMESTAMPTZ NOT NULL,
-    event_type      TEXT,
-    impact_level    TEXT,
-    impact_score    DOUBLE PRECISION,
-    urgency_score   DOUBLE PRECISION,
-    sentiment_score DOUBLE PRECISION,
-    sentiment_label TEXT,
-    news_mode       TEXT,
-    symbols_affected JSONB,
-    payload         JSONB,
-    ingested_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id               TEXT PRIMARY KEY,
+    source           TEXT NOT NULL,
+    headline         TEXT NOT NULL,
+    summary          TEXT,
+    url              TEXT,
+    published_at     TIMESTAMPTZ NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    event_type       TEXT NOT NULL DEFAULT 'unknown',
+    news_mode        TEXT NOT NULL DEFAULT 'informational',
+    sentiment_score  DOUBLE PRECISION NOT NULL DEFAULT 0,
+    impact_score     DOUBLE PRECISION NOT NULL DEFAULT 0,
+    urgency_score    DOUBLE PRECISION NOT NULL DEFAULT 0,
+    volatility_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+    sentiment_label  TEXT NOT NULL DEFAULT 'neutral',
+    volatility_risk  TEXT NOT NULL DEFAULT 'low',
+    impact_level     TEXT NOT NULL DEFAULT 'low',
+    trade_action     TEXT NOT NULL DEFAULT 'none',
+    explanation      TEXT,
+    symbols_affected TEXT[],
+    asset_classes    TEXT[],
+    raw_payload      JSONB NOT NULL DEFAULT '{}'
 );
 """
 
@@ -92,6 +107,7 @@ class TimescaleStore:
         settings = get_settings()
         self.database_url = database_url or settings.database_url
         self._available = False
+        self._use_symbol_impact_v2 = False
         if self.database_url:
             self._init_connection()
 
@@ -106,12 +122,21 @@ class TimescaleStore:
                     cur.execute(MODEL_REGISTRY_DDL)
                     cur.execute(NEWS_EVENTS_DDL)
                     cur.execute(SYMBOL_IMPACTS_DDL)
+                    cur.execute(NEWS_TABLES_DDL)
+                    try:
+                        cur.execute(NEWS_EVENTS_V2_COLUMNS)
+                    except Exception:
+                        pass
+                    self._use_symbol_impact_v2 = self._table_exists(cur, "symbol_news_impact")
                     try:
                         cur.execute(
                             "SELECT create_hypertable('ohlcv_candles', 'time', if_not_exists => TRUE);"
                         )
+                        cur.execute(
+                            "SELECT create_hypertable('news_events', 'published_at', if_not_exists => TRUE);"
+                        )
                     except Exception:
-                        logger.debug("TimescaleDB extension not present — using plain Postgres table")
+                        logger.debug("TimescaleDB extension not present — using plain Postgres tables")
                 conn.commit()
             self._available = True
         except Exception as exc:
@@ -252,36 +277,16 @@ class TimescaleStore:
             return 0
         sql = """
             INSERT INTO news_events (
-                id, source, headline, summary, url, published_at,
-                event_type, impact_level, impact_score, urgency_score,
-                sentiment_score, sentiment_label, news_mode, symbols_affected, payload
-            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb)
+                id, source, headline, summary, url, published_at, created_at,
+                event_type, news_mode, sentiment_score, impact_score, urgency_score,
+                volatility_score, sentiment_label, volatility_risk, impact_level,
+                trade_action, explanation, symbols_affected, asset_classes, raw_payload
+            ) VALUES (
+                %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb
+            )
             ON CONFLICT (id) DO NOTHING
         """
-        rows = []
-        for e in events:
-            pub = e.published_at
-            if pub.tzinfo is None:
-                pub = pub.replace(tzinfo=timezone.utc)
-            rows.append(
-                (
-                    e.id,
-                    e.source.value if hasattr(e.source, "value") else e.source,
-                    e.headline,
-                    e.summary,
-                    e.url,
-                    pub,
-                    e.event_type.value,
-                    e.impact_level.value,
-                    e.impact_score,
-                    e.urgency_score,
-                    e.sentiment_score,
-                    e.sentiment_label.value,
-                    e.news_mode.value,
-                    json.dumps(e.symbols_affected),
-                    json.dumps(e.model_dump(), default=str),
-                )
-            )
+        rows = [news_event_insert_row(e) for e in events]
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.executemany(sql, rows)
@@ -291,16 +296,136 @@ class TimescaleStore:
     def insert_symbol_impacts(self, impacts: list) -> int:
         if not self._available or not impacts:
             return 0
-        sql = """
-            INSERT INTO symbol_news_impacts (news_event_id, symbol, impact_direction, confidence)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (news_event_id, symbol) DO UPDATE SET
-                impact_direction = EXCLUDED.impact_direction,
-                confidence = EXCLUDED.confidence
-        """
+        if self._use_symbol_impact_v2:
+            sql = """
+                INSERT INTO symbol_news_impact (news_event_id, symbol, impact_direction, confidence)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (news_event_id, symbol) DO UPDATE SET
+                    impact_direction = EXCLUDED.impact_direction,
+                    confidence = EXCLUDED.confidence
+            """
+        else:
+            sql = """
+                INSERT INTO symbol_news_impacts (news_event_id, symbol, impact_direction, confidence)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (news_event_id, symbol) DO UPDATE SET
+                    impact_direction = EXCLUDED.impact_direction,
+                    confidence = EXCLUDED.confidence
+            """
         rows = [(i.news_event_id, i.symbol, i.impact_direction, i.confidence) for i in impacts]
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.executemany(sql, rows)
             conn.commit()
         return len(rows)
+
+    def insert_economic_event(self, event) -> None:
+        if not self._available:
+            return
+        sql = """
+            INSERT INTO economic_events (
+                id, event_name, event_type, scheduled_at, country, impact_level, source,
+                forecast_value, actual_value, previous_value, surprise_pct, affected_symbols
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (id) DO NOTHING
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, economic_event_row(event))
+            conn.commit()
+
+    def insert_risk_windows(self, windows: list) -> int:
+        if not self._available or not windows:
+            return 0
+        sql = """
+            INSERT INTO news_risk_windows (
+                id, event_name, event_type, starts_at, ends_at, affected_symbols,
+                risk_level, trading_allowed, reduce_size, require_manual, reason
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (id) DO NOTHING
+        """
+        rows = [risk_window_row(w) for w in windows]
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.executemany(sql, rows)
+            conn.commit()
+        return len(rows)
+
+    def insert_news_feature_snapshot(
+        self,
+        features,
+        symbol: str,
+        timeframe: str,
+        signal_id: Optional[str] = None,
+    ) -> None:
+        if not self._available:
+            return
+        sql = """
+            INSERT INTO news_feature_snapshots (
+                signal_id, symbol, timeframe,
+                news_sentiment_score, news_impact_score, news_urgency_score, volatility_risk_score,
+                minutes_since_last_news, minutes_until_next_event,
+                high_impact_news_active, breaking_news_active, affected_symbol_match,
+                news_conflict_score, trading_blocked, reduce_size_recommended,
+                manual_approval_required, news_risk_reason,
+                latest_headline, latest_event_type, latest_sentiment_label
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, news_features_row(features, symbol, timeframe, signal_id))
+            conn.commit()
+
+    def fetch_active_risk_windows(
+        self,
+        symbol: str,
+        at: Optional[datetime] = None,
+    ) -> list:
+        if not self._available:
+            return []
+        now = at or datetime.now(timezone.utc)
+        sql = """
+            SELECT id, event_name, event_type, starts_at, ends_at, affected_symbols,
+                   risk_level, trading_allowed, reduce_size, require_manual, reason, created_at
+            FROM news_risk_windows
+            WHERE starts_at <= %s AND ends_at >= %s
+              AND (affected_symbols IS NULL
+                   OR cardinality(affected_symbols) = 0
+                   OR %s = ANY(affected_symbols))
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (now, now, symbol.upper()))
+                cols = [d[0] for d in cur.description]
+                rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        return [row_to_risk_window(r) for r in rows]
+
+    def fetch_upcoming_economic_events(self, hours_ahead: int = 48) -> list:
+        if not self._available:
+            return []
+        now = datetime.now(timezone.utc)
+        cutoff = now + timedelta(hours=hours_ahead)
+        sql = """
+            SELECT id, event_name, event_type, scheduled_at, country, impact_level, source,
+                   forecast_value, actual_value, previous_value, surprise_pct,
+                   affected_symbols, created_at
+            FROM economic_events
+            WHERE scheduled_at > %s AND scheduled_at <= %s
+            ORDER BY scheduled_at ASC
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (now, cutoff))
+                cols = [d[0] for d in cur.description]
+                rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        return [row_to_economic_event(r) for r in rows]
+
+    def _table_exists(self, cur, table: str) -> bool:
+        cur.execute(
+            """
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = %s
+            """,
+            (table,),
+        )
+        return cur.fetchone() is not None

@@ -60,14 +60,14 @@ def test_size_reduction(news_agent):
     now = datetime.now(timezone.utc)
     news_agent.add_economic_event(
         EconomicEvent(
-            event_name="PMI",
-            event_type=EventType.GENERAL_MARKET,
-            scheduled_at=now + timedelta(minutes=20),
+            event_name="Jobless Claims",
+            event_type=EventType.JOBLESS_CLAIMS,
+            scheduled_at=now + timedelta(minutes=5),
             impact_level=ImpactLevel.MEDIUM,
             affected_symbols=["ES"],
         )
     )
-    assert news_agent.get_size_reduction_factor("ES") <= 0.75
+    assert news_agent.get_size_reduction_factor("ES") == 0.5
 
 
 def test_get_latest_explanation(news_agent):

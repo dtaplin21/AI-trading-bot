@@ -1,0 +1,3 @@
+# Optional technical-analysis indicators (Python 3.11–3.13 only; pulls numba)
+-r requirements.txt
+pandas-ta>=0.3.14b

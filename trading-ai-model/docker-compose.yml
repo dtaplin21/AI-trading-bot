@@ -11,7 +11,9 @@ services:
       POSTGRES_DB: trading_ai
     volumes:
       - timescale_data:/var/lib/postgresql/data
-      - ./scripts/init_timescale.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./db/migrations/001_market_data.sql:/docker-entrypoint-initdb.d/01_market.sql
+      - ./db/migrations/002_trading_signals.sql:/docker-entrypoint-initdb.d/02_signals.sql
+      - ./db/migrations/003_news_intelligence_tables.sql:/docker-entrypoint-initdb.d/03_news.sql
 
 volumes:
   timescale_data:

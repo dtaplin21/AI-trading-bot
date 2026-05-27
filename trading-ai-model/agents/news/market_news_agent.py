@@ -46,8 +46,11 @@ class MarketNewsAgent:
         settings = get_settings()
         self._polling_interval = polling_interval or settings.news_polling_interval_seconds
         self._db = db_store or NewsDbStore()
-
-        self._calendar = EconomicCalendarService()
+        self._calendar = EconomicCalendarService(
+            store=self._db.store if self._db.available else None
+        )
+        if self._db.available:
+            self._calendar.hydrate_from_store()
         if settings.news_load_default_calendar:
             self._calendar.load_default_session_events()
         self._sentiment = NewsSentimentService(use_llm=use_llm and settings.llm_enabled)
@@ -151,7 +154,13 @@ class MarketNewsAgent:
         return self._risk.compute_features(symbol, recent, technical_direction, at)
 
     def is_trading_blocked(self, symbol: str) -> tuple[bool, str]:
-        return self._calendar.is_trading_blocked(symbol)
+        blocked, reason = self._calendar.is_trading_blocked(symbol)
+        if blocked:
+            return True, reason
+        features = self.get_news_features(symbol)
+        if features.trading_blocked:
+            return True, features.news_risk_reason or "High-impact news active"
+        return False, ""
 
     def get_size_reduction_factor(self, symbol: str) -> float:
         return self._calendar.get_size_reduction_factor(symbol)

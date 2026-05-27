@@ -76,6 +76,15 @@ class LearningAgent(BaseAgent):
                 row["signal_rank"],
                 row,
             )
+            news_raw = ctx.metadata.get("news_features")
+            if news_raw:
+                from agents.news.news_schemas import NewsFeatures
+
+                self.store.insert_news_feature_snapshot(
+                    NewsFeatures(**news_raw),
+                    ctx.symbol,
+                    ctx.timeframe,
+                )
 
         ctx.metadata["learning_logged"] = True
         ctx.metadata["retrain_due"] = self._check_retrain_due()
