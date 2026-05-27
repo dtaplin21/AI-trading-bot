@@ -1,37 +1,54 @@
 import { useEffect, useState } from "react";
 import TradeResultsDashboard from "./components/TradeResultsDashboard.jsx";
+import SystemStatusPanel from "./components/SystemStatusPanel.jsx";
 import { fetchTrades } from "./api/trades.js";
+import { fetchDashboard } from "./api/dashboard.js";
+
+const REFRESH_MS = 30_000;
 
 export default function App() {
   const [trades, setTrades] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [dashboard, setDashboard] = useState(null);
+  const [loadingTrades, setLoadingTrades] = useState(true);
+  const [loadingDashboard, setLoadingDashboard] = useState(true);
   const [error, setError] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
 
-    fetchTrades()
-      .then((data) => {
-        if (!cancelled) setTrades(data);
-      })
-      .catch((err) => {
+    async function load() {
+      try {
+        const [tradesData, dashData] = await Promise.all([fetchTrades(), fetchDashboard()]);
+        if (!cancelled) {
+          setTrades(tradesData);
+          setDashboard(dashData);
+          setError(null);
+        }
+      } catch (err) {
         if (!cancelled) setError(err.message);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+      } finally {
+        if (!cancelled) {
+          setLoadingTrades(false);
+          setLoadingDashboard(false);
+        }
+      }
+    }
+
+    load();
+    const timer = setInterval(load, REFRESH_MS);
 
     return () => {
       cancelled = true;
+      clearInterval(timer);
     };
   }, []);
 
   return (
     <div style={{ maxWidth: 1100, margin: "0 auto", padding: "2rem 1.25rem" }}>
       <header style={{ marginBottom: "1.5rem" }}>
-        <h1 style={{ margin: 0, fontSize: 24, fontWeight: 500 }}>Trade Results</h1>
+        <h1 style={{ margin: 0, fontSize: 24, fontWeight: 500 }}>Trading Dashboard</h1>
         <p style={{ margin: "6px 0 0", fontSize: 14, color: "var(--color-text-secondary)" }}>
-          Per-trade P&amp;L from paper trading — entry, exit, ticks, and SignalRank
+          Live broker connections, open positions, watched charts, and closed trade history
         </p>
       </header>
 
@@ -46,11 +63,14 @@ export default function App() {
             fontSize: 13,
           }}
         >
-          API unavailable ({error}). Showing mock data.
+          API unavailable ({error}). Showing fallback data where possible.
         </div>
       )}
 
-      <TradeResultsDashboard trades={trades.length ? trades : undefined} loading={loading} />
+      <SystemStatusPanel dashboard={dashboard} loading={loadingDashboard} />
+
+      <h2 style={{ margin: "0 0 1rem", fontSize: 18, fontWeight: 500 }}>Closed trades</h2>
+      <TradeResultsDashboard trades={trades.length ? trades : undefined} loading={loadingTrades} />
     </div>
   );
 }

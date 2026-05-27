@@ -1,0 +1,182 @@
+"""In-memory open position tracker for paper (and future live) execution."""
+
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from threading import Lock
+from typing import Optional
+
+from config.symbols import SYMBOLS
+
+BROKER_DISPLAY_NAMES: dict[str, str] = {
+    "paper": "Paper Trading",
+    "robinhood": "Robinhood",
+    "webull": "Webull",
+    "alpaca": "Alpaca",
+    "schwab": "Charles Schwab",
+    "tastytrade": "tastytrade",
+    "ibkr": "Interactive Brokers",
+    "tradovate": "Tradovate",
+    "ninjatrader": "NinjaTrader",
+}
+
+TICK_SIZES = {sym: spec.tick_size for sym, spec in SYMBOLS.items()}
+TICK_VALUES = {sym: spec.tick_value for sym, spec in SYMBOLS.items()}
+
+
+@dataclass
+class OpenPosition:
+    id: str
+    symbol: str
+    direction: str
+    entry_price: float
+    stop_loss: float
+    take_profit: float
+    quantity: int
+    opened_at: datetime
+    broker: str = "paper"
+    platform_id: str = "paper"
+    signal_rank: int = 0
+    current_price: Optional[float] = None
+
+    def unrealized_ticks(self) -> float:
+        price = self.current_price if self.current_price is not None else self.entry_price
+        tick = TICK_SIZES.get(self.symbol, 0.25)
+        diff = price - self.entry_price
+        if self.direction == "short":
+            diff = -diff
+        return round(diff / tick, 1)
+
+    def unrealized_pnl_dollars(self) -> float:
+        ticks = self.unrealized_ticks()
+        tick_val = TICK_VALUES.get(self.symbol, 1.25)
+        return round(ticks * tick_val * self.quantity, 2)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "symbol": self.symbol,
+            "direction": self.direction,
+            "entry_price": self.entry_price,
+            "current_price": self.current_price if self.current_price is not None else self.entry_price,
+            "stop_loss": self.stop_loss,
+            "take_profit": self.take_profit,
+            "quantity": self.quantity,
+            "unrealized_pnl_dollars": self.unrealized_pnl_dollars(),
+            "unrealized_pnl_ticks": self.unrealized_ticks(),
+            "opened_at": self.opened_at.isoformat(),
+            "broker": self.broker,
+            "platform_id": self.platform_id,
+            "platform_name": BROKER_DISPLAY_NAMES.get(self.platform_id, self.broker),
+            "signal_rank": self.signal_rank,
+            "status": "open",
+        }
+
+
+@dataclass
+class PositionBook:
+    """Thread-safe store of open positions."""
+
+    _positions: dict[str, OpenPosition] = field(default_factory=dict)
+    _lock: Lock = field(default_factory=Lock)
+
+    def open_position(
+        self,
+        *,
+        symbol: str,
+        direction: str,
+        entry_price: float,
+        stop_loss: float,
+        take_profit: float,
+        quantity: int = 1,
+        broker: str = "paper",
+        platform_id: str | None = None,
+        signal_rank: int = 0,
+    ) -> OpenPosition:
+        pid = platform_id or broker
+        pos = OpenPosition(
+            id=f"pos-{uuid.uuid4().hex[:8]}",
+            symbol=symbol.upper(),
+            direction=direction,
+            entry_price=entry_price,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            quantity=quantity,
+            opened_at=datetime.now(timezone.utc),
+            broker=broker,
+            platform_id=pid,
+            signal_rank=signal_rank,
+            current_price=entry_price,
+        )
+        with self._lock:
+            self._positions[pos.id] = pos
+        return pos
+
+    def close_position(self, position_id: str) -> Optional[OpenPosition]:
+        with self._lock:
+            return self._positions.pop(position_id, None)
+
+    def update_price(self, symbol: str, price: float) -> None:
+        sym = symbol.upper()
+        with self._lock:
+            for pos in self._positions.values():
+                if pos.symbol == sym:
+                    pos.current_price = price
+
+    def list_open(self) -> list[dict]:
+        with self._lock:
+            return [p.to_dict() for p in sorted(self._positions.values(), key=lambda p: p.opened_at, reverse=True)]
+
+    def count(self) -> int:
+        with self._lock:
+            return len(self._positions)
+
+
+_book: PositionBook | None = None
+
+
+def get_position_book() -> PositionBook:
+    global _book
+    if _book is None:
+        _book = PositionBook()
+        _seed_demo_positions(_book)
+    return _book
+
+
+def _seed_demo_positions(book: PositionBook) -> None:
+    """Seed paper positions when book is empty (development dashboard)."""
+    from datetime import timedelta
+
+    now = datetime.now(timezone.utc)
+    book.open_position(
+        symbol="MES",
+        direction="long",
+        entry_price=5420.25,
+        stop_loss=5410.0,
+        take_profit=5442.0,
+        quantity=2,
+        signal_rank=84,
+        platform_id="tradovate",
+        broker="tradovate",
+    )
+    book.open_position(
+        symbol="NQ",
+        direction="short",
+        entry_price=19355.0,
+        stop_loss=19390.0,
+        take_profit=19290.0,
+        quantity=1,
+        signal_rank=78,
+        platform_id="paper",
+        broker="paper",
+    )
+    with book._lock:
+        for pos in book._positions.values():
+            if pos.symbol == "MES":
+                pos.current_price = 5426.50
+                pos.opened_at = now - timedelta(hours=1, minutes=12)
+            elif pos.symbol == "NQ":
+                pos.current_price = 19338.0
+                pos.opened_at = now - timedelta(minutes=38)

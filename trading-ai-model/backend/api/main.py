@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from agents.news_runtime import start_news_background
-from api.routes import backtest, health, market_state, models, news, signals, trades
+from api.routes import backtest, dashboard, health, market_state, models, news, signals, trades
 
 
 @asynccontextmanager
@@ -30,6 +30,7 @@ app.include_router(signals.router, prefix="/signals", tags=["signals"])
 app.include_router(backtest.router, prefix="/backtest", tags=["backtest"])
 app.include_router(market_state.router, prefix="/state", tags=["market_state"])
 app.include_router(trades.router, prefix="/trades", tags=["trades"])
+app.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
 app.include_router(models.router, prefix="/models", tags=["models"])
 app.include_router(news.router, prefix="/news", tags=["news"])
 

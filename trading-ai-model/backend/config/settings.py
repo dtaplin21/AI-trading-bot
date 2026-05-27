@@ -48,6 +48,27 @@ class Settings(BaseSettings):
 
     paper_trading_enabled: bool = True
     signal_log_dir: str = "./logs/signals"
+    chart_watchlist: str = "MES:5m,ES:5m,NQ:5m,MNQ:5m"
+
+    # Broker / trading platforms (comma-separated ids: paper,robinhood,alpaca,ibkr,tradovate,...)
+    enabled_brokers: str = "paper"
+
+    robinhood_access_token: str = ""
+    webull_app_key: str = ""
+    webull_app_secret: str = ""
+    alpaca_api_key: str = ""
+    alpaca_secret_key: str = ""
+    alpaca_paper: bool = True
+    schwab_app_key: str = ""
+    schwab_app_secret: str = ""
+    tastytrade_username: str = ""
+    tastytrade_password: str = ""
+    ibkr_account_id: str = ""
+    ibkr_host: str = "127.0.0.1"
+    ibkr_port: int = 7497
+    tradovate_api_key: str = ""
+    tradovate_username: str = ""
+    ninjatrader_license_key: str = ""
 
     # News intelligence
     news_enabled: bool = True
