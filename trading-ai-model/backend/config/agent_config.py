@@ -40,3 +40,10 @@ METHOD_NAME_ALIASES: dict[str, str] = {
     "level_369": "agent_369",
     "markov_state": "markov",
 }
+
+MCTS_CONFIG: dict[str, float | int] = {
+    "min_rollouts": 500,
+    "exploration_constant": 1.414,
+    "confidence_threshold": 0.70,
+    "conflict_threshold": 0.30,
+}

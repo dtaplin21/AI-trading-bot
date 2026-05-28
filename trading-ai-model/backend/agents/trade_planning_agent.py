@@ -1,16 +1,25 @@
-"""Trade Planning Agent — MCTS action proposals, no execution."""
+"""Trade Planning Agent — hierarchical MCTS action proposals, no execution."""
 
 from agents.base import BaseAgent
 from agents.pipeline_context import PipelineContext
 from agents.schemas import TradeAction, TradePlan
-from mcts.mcts_planner import MCTSPlanner
+from config.agent_config import TRADING_PHILOSOPHY
+from mcts.mcts_planner import HierarchicalMCTSPlanner
+from pipeline.confluence_report import ConfluenceReport
+from pipeline.reward_function import BeamSearchScorer, RewardFunction
 
 
 class TradePlanningAgent(BaseAgent):
     name = "trade_planning"
 
-    def __init__(self):
-        self.planner = MCTSPlanner()
+    def __init__(self) -> None:
+        self.planner = HierarchicalMCTSPlanner()
+        self._beam = BeamSearchScorer(
+            RewardFunction(
+                loss_aversion=float(TRADING_PHILOSOPHY["loss_aversion_multiplier"])
+            ),
+            beam_width=4,
+        )
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         if not ctx.prediction or not ctx.fused:
@@ -24,49 +33,74 @@ class TradePlanningAgent(BaseAgent):
             )
             return ctx
 
-        compressed_state = {
-            "market_state": ctx.chart.trend_direction if ctx.chart else "unknown",
-            "model_confidence": ctx.prediction.model_confidence,
-            "expected_value": ctx.prediction.expected_value,
-            "risk_of_ruin": ctx.fused.features.get("risk_of_ruin", 0),
-            "number_confluence_score": ctx.fused.features.get("level_369_reversal_zone_active", 0),
-            "trend_strength": ctx.fused.features.get("momentum_momentum_score", 0),
-            "volatility_state": "normal",
-            "signal_rank": ctx.fused.signal_rank,
-        }
+        if not ctx.confluence:
+            ctx.confluence = ConfluenceReport(
+                symbol=ctx.symbol,
+                timeframe=ctx.timeframe,
+                timestamp=ctx.timestamp,
+                regime="chop",
+            )
 
-        action = self.planner.plan(compressed_state)
         price = float(ctx.ohlcv["close"].iloc[-1])
         atr = float((ctx.ohlcv["high"] - ctx.ohlcv["low"]).tail(14).mean())
+        is_long_bias = not ctx.chart or ctx.chart.trend_direction != "down"
+        stop = price - atr * 2 if is_long_bias else price + atr * 2
+        target = price + atr * 4 if is_long_bias else price - atr * 4
 
-        if action == "wait" and ctx.prediction.should_start:
-            action = "enter_long" if ctx.chart and ctx.chart.trend_direction != "down" else "enter_short"
+        p_target = float(ctx.prediction.target_before_stop_probability or 0.5)
+        p_stop = max(0.0, 1.0 - p_target - 0.15)
+        ev = float(ctx.prediction.expected_value or 0.0)
 
-        trade_action = self._map_action(action)
-        is_long = trade_action == TradeAction.ENTER_LONG
+        beam_confidence = self._beam.score_path(
+            cumulative_r=ev / max(1.0, atr * 10),
+            bars_held=0,
+        )
+        use_mcts = HierarchicalMCTSPlanner.should_use_mcts(
+            beam_confidence=beam_confidence,
+            confluence=ctx.confluence,
+            signal_rank=ctx.fused.signal_rank,
+        )
+
+        if use_mcts or ctx.prediction.should_start:
+            self.planner.symbol = ctx.symbol
+            pipeline_plan = self.planner.plan(
+                confluence=ctx.confluence,
+                p_target=p_target,
+                p_stop=p_stop,
+                ev_dollars=ev,
+                entry_price=price,
+                stop_price=stop,
+                target_price=target,
+                timeframe=ctx.timeframe,
+            )
+            ctx.trade_plan = self._from_pipeline_plan(pipeline_plan, ctx.fused.signal_rank)
+            return ctx
 
         ctx.trade_plan = TradePlan(
-            action=trade_action,
+            action=TradeAction.WAIT,
+            wait_condition="mcts_skip",
             entry_price=price,
-            stop_loss=price - atr * 2 if is_long else price + atr * 2,
-            take_profit=price + atr * 4 if is_long else price - atr * 4,
-            stop_limit=price - atr if is_long else price + atr,
-            start_condition=f"signal_rank>={ctx.fused.signal_rank}",
-            stop_condition="stop_loss_hit",
-            wait_condition=None,
-            mcts_path=[action],
+            mcts_path=["skip"],
         )
         return ctx
 
-    def _map_action(self, action: str) -> TradeAction:
-        mapping = {
-            "wait": TradeAction.WAIT,
+    def _from_pipeline_plan(self, plan, signal_rank: int) -> TradePlan:
+        action_map = {
             "enter_long": TradeAction.ENTER_LONG,
             "enter_short": TradeAction.ENTER_SHORT,
-            "scale_in": TradeAction.SCALE_IN,
-            "partial_profit": TradeAction.PARTIAL_PROFIT,
-            "trail_stop": TradeAction.TRAIL_STOP,
-            "exit": TradeAction.EXIT,
+            "wait": TradeAction.WAIT,
             "do_nothing": TradeAction.DO_NOTHING,
         }
-        return mapping.get(action, TradeAction.WAIT)
+        action = action_map.get(plan.action.value, TradeAction.WAIT)
+        path = plan.plan_notes.split("|") if plan.plan_notes else []
+        return TradePlan(
+            action=action,
+            entry_price=plan.entry_price,
+            stop_loss=plan.stop_loss,
+            take_profit=plan.take_profit,
+            stop_limit=plan.stop_loss,
+            start_condition=f"signal_rank>={signal_rank}",
+            stop_condition="stop_loss_hit",
+            wait_condition="mcts_timing" if action == TradeAction.WAIT else None,
+            mcts_path=[plan.plan_notes] if plan.plan_notes else [],
+        )
