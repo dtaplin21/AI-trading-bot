@@ -38,7 +38,10 @@ class ExecutionAgent(BaseAgent):
             "entry": ctx.trade_plan.entry_price,
             "stop": ctx.trade_plan.stop_loss,
             "target": ctx.trade_plan.take_profit,
-            "size": ctx.risk.max_position_size,
+            "size": max(1, int(ctx.risk.max_position_size)),
+            "snapshot_id": ctx.metadata.get("world_state_snapshot_id", ""),
+            "timeframe": ctx.timeframe,
+            "signal_rank": ctx.fused.signal_rank if ctx.fused else 0,
         }
         result = self.paper.execute(order)
         ctx.execution = ExecutionResult(

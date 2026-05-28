@@ -103,6 +103,10 @@ class TradingSupervisor:
         # 8. Risk Agent (veto gate)
         ctx = self.risk.run(ctx)
 
+        # Store world state before execution so paper trades link to snapshots
+        if ctx.confluence and not ctx.metadata.get("world_state_stored"):
+            self.learning._store_world_state(ctx)
+
         # 9. Execution (only if approved and execute=True)
         if execute and ctx.risk and ctx.risk.approved:
             ctx = self.execution.run(ctx)

@@ -46,16 +46,18 @@ class ProbabilityGate:
         ev_dollars: float,
         sample_size: int,
         signal_rank: int,
+        context: str = "",
     ) -> GateResult:
         failures: list[str] = []
+        prefix = f"{context}: " if context else ""
 
         if p_success < self.p_min:
-            failures.append(f"P(success) {p_success:.2f} < {self.p_min:.2f}")
+            failures.append(f"{prefix}P(success) {p_success:.2f} < {self.p_min:.2f}")
         if ev_dollars < self.ev_min:
-            failures.append(f"EV ${ev_dollars:.2f} < ${self.ev_min:.2f}")
+            failures.append(f"{prefix}EV ${ev_dollars:.2f} < ${self.ev_min:.2f}")
         if sample_size < self.sample_min:
-            failures.append(f"sample size {sample_size} < {self.sample_min}")
+            failures.append(f"{prefix}sample size {sample_size} < {self.sample_min}")
         if signal_rank < self.rank_min:
-            failures.append(f"signal rank {signal_rank} < {self.rank_min}")
+            failures.append(f"{prefix}signal rank {signal_rank} < {self.rank_min}")
 
         return GateResult(passed=len(failures) == 0, failures=failures)

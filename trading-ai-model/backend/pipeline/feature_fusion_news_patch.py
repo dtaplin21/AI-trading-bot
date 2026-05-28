@@ -123,3 +123,24 @@ def fuse_news_into_pipeline(
         news.news_conflict_score,
     )
     return features, news, tech_dir
+
+
+class FeatureFusionAgent:
+    """Pipeline-facing fusion agent — builds FusedFeatureSet from pipeline context."""
+
+    def __init__(self, news_agent=None) -> None:
+        from agents.feature_fusion_agent import FeatureFusionAgent as AgentFusion
+
+        self._inner = AgentFusion(news_agent=news_agent)
+
+    def build_from_context(self, ctx: PipelineContext) -> "FusedFeatureSet":
+        from pipeline.schemas import FusedFeatureSet
+
+        self._inner.run(ctx)
+        if ctx.fused is None:
+            raise ValueError("Feature fusion produced no fused features")
+        return FusedFeatureSet.from_fused_features(ctx.fused)
+
+    def build(self, ctx: PipelineContext, **kwargs) -> "FusedFeatureSet":
+        """Alias — kwargs ignored; ctx must include method outputs and confluence."""
+        return self.build_from_context(ctx)

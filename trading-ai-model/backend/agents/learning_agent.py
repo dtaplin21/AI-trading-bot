@@ -89,7 +89,8 @@ class LearningAgent(BaseAgent):
 
         ctx.metadata["learning_logged"] = True
         ctx.metadata["retrain_due"] = self._check_retrain_due()
-        self._store_world_state(ctx)
+        if not ctx.metadata.get("world_state_stored"):
+            self._store_world_state(ctx)
         return ctx
 
     def _store_world_state(self, ctx: PipelineContext) -> None:
@@ -97,7 +98,8 @@ class LearningAgent(BaseAgent):
             return
         store = get_world_state_store()
         ts = ctx.timestamp.isoformat().replace(":", "-")
-        snapshot_id = f"{ctx.symbol}_{ctx.timeframe}_{ts}"
+        snapshot_id = ctx.metadata.get("world_state_snapshot_id") or f"{ctx.symbol}_{ctx.timeframe}_{ts}"
+        ctx.metadata["world_state_snapshot_id"] = snapshot_id
         rank = ctx.fused.signal_rank if ctx.fused else 0
         predicted_p = 0.0
         predicted_ev = 0.0
@@ -111,7 +113,7 @@ class LearningAgent(BaseAgent):
             predicted_p=predicted_p,
             predicted_ev=predicted_ev,
         )
-        ctx.metadata["world_state_snapshot_id"] = snapshot_id
+        ctx.metadata["world_state_stored"] = True
         ctx.metadata["world_state_stats"] = store.stats()
 
     def _check_retrain_due(self) -> bool:

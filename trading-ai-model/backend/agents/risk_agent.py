@@ -6,13 +6,14 @@ from agents.schemas import RiskVerdict, TradeAction as AgentTradeAction
 from pipeline.confluence_report import ConfluenceReport
 from pipeline.schemas import FusedFeatureSet, TradeAction, TradePlan
 from risk.risk_engine import RiskEngine
+from risk.risk_runtime import get_risk_engine
 
 
 class RiskAgent(BaseAgent):
     name = "risk"
 
     def __init__(self, news_agent=None, engine: RiskEngine | None = None):
-        self.engine = engine or RiskEngine()
+        self.engine = engine or get_risk_engine()
         self._news = news_agent
 
     def run(self, ctx: PipelineContext) -> PipelineContext:

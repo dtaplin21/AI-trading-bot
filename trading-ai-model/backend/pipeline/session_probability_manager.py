@@ -30,12 +30,29 @@ class SessionSetup(BaseModel):
 class SessionProbabilityManager:
     """Tracks scored setups for the current session."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        watched_symbols: list[str] | None = None,
+        watched_timeframes: list[str] | None = None,
+    ) -> None:
+        self.watched_symbols = watched_symbols or []
+        self.watched_timeframes = watched_timeframes or []
         self._setups: list[SessionSetup] = []
+        self._outcomes: dict[str, dict] = {}
 
     def add_setup(self, setup: SessionSetup) -> None:
+        if self.watched_symbols and setup.symbol not in self.watched_symbols:
+            return
+        if self.watched_timeframes and setup.timeframe not in self.watched_timeframes:
+            return
         self._setups.append(setup)
         self._setups.sort(key=lambda s: (-s.p_success, -s.signal_rank))
+
+    def record_outcome(self, setup_id: str, pnl: float, r_multiple: float) -> None:
+        self._outcomes[setup_id] = {
+            "pnl": pnl,
+            "r_multiple": r_multiple,
+        }
 
     def get_top_setups(self, n: int = 10, symbol: Optional[str] = None) -> list[SessionSetup]:
         items = self._setups

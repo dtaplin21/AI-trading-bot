@@ -39,7 +39,12 @@ class OpenPosition:
     broker: str = "paper"
     platform_id: str = "paper"
     signal_rank: int = 0
+    snapshot_id: str = ""
+    timeframe: str = "5m"
     current_price: Optional[float] = None
+    mfe_ticks: float = 0.0
+    mae_ticks: float = 0.0
+    duration_bars: int = 0
 
     def unrealized_ticks(self) -> float:
         price = self.current_price if self.current_price is not None else self.entry_price
@@ -53,6 +58,50 @@ class OpenPosition:
         ticks = self.unrealized_ticks()
         tick_val = TICK_VALUES.get(self.symbol, 1.25)
         return round(ticks * tick_val * self.quantity, 2)
+
+    def update_excursion(self, high: float, low: float) -> None:
+        """Track MFE/MAE from bar high/low."""
+        tick = TICK_SIZES.get(self.symbol, 0.25)
+        if self.direction == "long":
+            fav = (high - self.entry_price) / tick
+            adv = (self.entry_price - low) / tick
+        else:
+            fav = (self.entry_price - low) / tick
+            adv = (high - self.entry_price) / tick
+        self.mfe_ticks = max(self.mfe_ticks, round(fav, 1))
+        self.mae_ticks = max(self.mae_ticks, round(adv, 1))
+
+    def check_exit(self, high: float, low: float) -> tuple[Optional[str], Optional[float]]:
+        """Return (exit_reason, exit_price) if stop or target hit on this bar."""
+        if self.direction == "long":
+            if low <= self.stop_loss:
+                return "stop", self.stop_loss
+            if high >= self.take_profit:
+                return "target", self.take_profit
+        else:
+            if high >= self.stop_loss:
+                return "stop", self.stop_loss
+            if low <= self.take_profit:
+                return "target", self.take_profit
+        return None, None
+
+    def realized_pnl_dollars(self, exit_price: float) -> float:
+        tick = TICK_SIZES.get(self.symbol, 0.25)
+        tick_val = TICK_VALUES.get(self.symbol, 1.25)
+        diff = exit_price - self.entry_price
+        if self.direction == "short":
+            diff = -diff
+        ticks = diff / tick
+        return round(ticks * tick_val * self.quantity, 2)
+
+    def r_multiple(self, pnl_dollars: float) -> float:
+        tick = TICK_SIZES.get(self.symbol, 0.25)
+        tick_val = TICK_VALUES.get(self.symbol, 1.25)
+        risk_ticks = abs(self.entry_price - self.stop_loss) / tick
+        risk_dollars = risk_ticks * tick_val * self.quantity
+        if risk_dollars <= 0:
+            return 0.0
+        return round(pnl_dollars / risk_dollars, 2)
 
     def to_dict(self) -> dict:
         return {
@@ -71,6 +120,11 @@ class OpenPosition:
             "platform_id": self.platform_id,
             "platform_name": BROKER_DISPLAY_NAMES.get(self.platform_id, self.broker),
             "signal_rank": self.signal_rank,
+            "snapshot_id": self.snapshot_id,
+            "timeframe": self.timeframe,
+            "mfe_ticks": self.mfe_ticks,
+            "mae_ticks": self.mae_ticks,
+            "duration_bars": self.duration_bars,
             "status": "open",
         }
 
@@ -94,6 +148,8 @@ class PositionBook:
         broker: str = "paper",
         platform_id: str | None = None,
         signal_rank: int = 0,
+        snapshot_id: str = "",
+        timeframe: str = "5m",
     ) -> OpenPosition:
         pid = platform_id or broker
         pos = OpenPosition(
@@ -108,11 +164,35 @@ class PositionBook:
             broker=broker,
             platform_id=pid,
             signal_rank=signal_rank,
+            snapshot_id=snapshot_id,
+            timeframe=timeframe,
             current_price=entry_price,
         )
         with self._lock:
             self._positions[pos.id] = pos
         return pos
+
+    def update_on_bar(
+        self, symbol: str, high: float, low: float, close: float
+    ) -> list[tuple[str, OpenPosition, str, float]]:
+        """
+        Update positions for symbol; return list of
+        (position_id, position, exit_reason, exit_price) for closed trades.
+        """
+        sym = symbol.upper()
+        closed: list[tuple[str, OpenPosition, str, float]] = []
+        with self._lock:
+            for pid, pos in list(self._positions.items()):
+                if pos.symbol != sym:
+                    continue
+                pos.duration_bars += 1
+                pos.update_excursion(high, low)
+                pos.current_price = close
+                reason, exit_price = pos.check_exit(high, low)
+                if reason and exit_price is not None:
+                    closed.append((pid, pos, reason, exit_price))
+                    self._positions.pop(pid, None)
+        return closed
 
     def close_position(self, position_id: str) -> Optional[OpenPosition]:
         with self._lock:
