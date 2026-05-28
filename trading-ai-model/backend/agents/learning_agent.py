@@ -10,6 +10,7 @@ from agents.news_runtime import get_news_agent
 from agents.pipeline_context import PipelineContext
 from config.settings import get_settings
 from data.storage.timescale_store import TimescaleStore
+from pipeline.world_state_runtime import get_world_state_store
 
 
 class RetrainStage(str, Enum):
@@ -88,7 +89,30 @@ class LearningAgent(BaseAgent):
 
         ctx.metadata["learning_logged"] = True
         ctx.metadata["retrain_due"] = self._check_retrain_due()
+        self._store_world_state(ctx)
         return ctx
+
+    def _store_world_state(self, ctx: PipelineContext) -> None:
+        if not ctx.confluence:
+            return
+        store = get_world_state_store()
+        ts = ctx.timestamp.isoformat().replace(":", "-")
+        snapshot_id = f"{ctx.symbol}_{ctx.timeframe}_{ts}"
+        rank = ctx.fused.signal_rank if ctx.fused else 0
+        predicted_p = 0.0
+        predicted_ev = 0.0
+        if ctx.prediction:
+            predicted_p = float(ctx.prediction.target_before_stop_probability or 0.0)
+            predicted_ev = float(ctx.prediction.expected_value or 0.0)
+        store.store_snapshot(
+            snapshot_id=snapshot_id,
+            confluence=ctx.confluence,
+            signal_rank=rank,
+            predicted_p=predicted_p,
+            predicted_ev=predicted_ev,
+        )
+        ctx.metadata["world_state_snapshot_id"] = snapshot_id
+        ctx.metadata["world_state_stats"] = store.stats()
 
     def _check_retrain_due(self) -> bool:
         try:
