@@ -1,9 +1,5 @@
-"""Daily loss cap enforcement."""
+"""Daily loss cap enforcement — re-export from risk_engine."""
 
-class DailyLossLimiter:
-    def __init__(self, max_loss_pct: float):
-        self.max_loss_pct = max_loss_pct
+from risk.risk_engine import DailyLossLimiter
 
-    def breached(self, daily_pnl_pct: float) -> bool:
-        return daily_pnl_pct <= -self.max_loss_pct
-
+__all__ = ["DailyLossLimiter"]

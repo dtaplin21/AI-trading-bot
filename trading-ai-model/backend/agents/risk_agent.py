@@ -1,27 +1,19 @@
-"""Risk Agent — veto power; includes news blackout checks."""
+"""Risk Agent — final veto gate via full RiskEngine.approve()."""
 
 from agents.base import BaseAgent
-from agents.news_runtime import get_news_agent
 from agents.pipeline_context import PipelineContext
-from agents.schemas import RiskVerdict
-from config.risk_params import get_risk_limits
+from agents.schemas import RiskVerdict, TradeAction as AgentTradeAction
+from pipeline.confluence_report import ConfluenceReport
+from pipeline.schemas import FusedFeatureSet, TradeAction, TradePlan
 from risk.risk_engine import RiskEngine
 
 
 class RiskAgent(BaseAgent):
     name = "risk"
 
-    MAX_TRADES_PER_DAY = 10
-    MAX_RISK_OF_RUIN = 0.05
-
-    def __init__(self, news_agent=None):
-        self.engine = RiskEngine()
-        self.limits = get_risk_limits()
+    def __init__(self, news_agent=None, engine: RiskEngine | None = None):
+        self.engine = engine or RiskEngine()
         self._news = news_agent
-
-    @property
-    def news(self):
-        return self._news or get_news_agent()
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         passed: list[str] = []
@@ -32,57 +24,85 @@ class RiskAgent(BaseAgent):
         else:
             passed.append("data_fresh")
 
-        blocked, block_reason = self.news.is_trading_blocked(ctx.symbol)
-        if blocked:
-            failed.append(f"news_blackout:{block_reason}")
-        else:
-            passed.append("news_clear")
-
-        if self.news.requires_manual_approval(ctx.symbol):
-            failed.append("news_requires_manual_approval")
-        else:
-            passed.append("news_auto_ok")
-
-        rank = ctx.fused.signal_rank if ctx.fused else 0
-        decision = self.engine.evaluate(rank, ctx.portfolio, ctx.symbol)
-
-        if decision.approved:
-            passed.append("core_risk_checks")
-        else:
-            failed.append(decision.reason or "core_risk_rejected")
-
-        ror = float(ctx.fused.features.get("risk_of_ruin", 0)) if ctx.fused else 0
-        if ror <= self.MAX_RISK_OF_RUIN:
-            passed.append("risk_of_ruin")
-        else:
-            failed.append("risk_of_ruin_exceeded")
-
-        ev = ctx.prediction.expected_value if ctx.prediction else 0
-        if ev > 0:
-            passed.append("positive_ev")
-        else:
-            failed.append("non_positive_ev")
-
-        sample = ctx.historical_sample_size
-        if sample >= 300 or rank < 75:
-            passed.append("sample_size")
-        else:
-            failed.append("insufficient_sample_size")
-
         if not ctx.metadata.get("all_methods_ran", False):
             failed.append("incomplete_method_review")
         else:
             passed.append("all_methods_reviewed")
 
-        approved = len(failed) == 0 and decision.approved
-        size_factor = self.news.get_size_reduction_factor(ctx.symbol)
-        max_size = decision.max_position_size * size_factor if approved else 0.0
+        if not ctx.trade_plan or not ctx.fused:
+            ctx.risk = RiskVerdict(
+                approved=False,
+                reason="missing_plan_or_features",
+                checks_passed=passed,
+                checks_failed=failed + ["missing_plan_or_features"],
+            )
+            return ctx
+
+        self.engine.sync_portfolio(ctx.portfolio)
+
+        confluence = ctx.confluence or ConfluenceReport(
+            symbol=ctx.symbol,
+            timeframe=ctx.timeframe,
+            timestamp=ctx.timestamp,
+            regime="chop",
+        )
+        fused = FusedFeatureSet.from_fused_features(ctx.fused)
+        plan = self._to_pipeline_plan(ctx)
+
+        p_success = float(ctx.prediction.target_before_stop_probability or 0.0) if ctx.prediction else 0.0
+        ev = float(ctx.prediction.expected_value or 0.0) if ctx.prediction else 0.0
+        sample = int(
+            ctx.fused.features.get("strategy_math_sample_size", ctx.historical_sample_size) or 0
+        )
+
+        pre_failed = list(failed)
+
+        decision = self.engine.approve(
+            plan=plan,
+            fused=fused,
+            confluence=confluence,
+            p_success=p_success,
+            ev_dollars=ev,
+            sample_size=sample,
+            signal_rank=ctx.fused.signal_rank,
+        )
+
+        failed = pre_failed + decision.rejection_reasons
+        approved = decision.approved and not pre_failed
+
+        if decision.approved:
+            passed.append("core_risk_checks")
+
+        ctx.metadata["risk_decision"] = decision.model_dump()
 
         ctx.risk = RiskVerdict(
             approved=approved,
             reason=failed[0] if failed else None,
-            max_position_size=max_size,
+            max_position_size=float(decision.position_size_contracts),
             checks_passed=passed,
             checks_failed=failed,
         )
         return ctx
+
+    def _to_pipeline_plan(self, ctx: PipelineContext) -> TradePlan:
+        tp = ctx.trade_plan
+        action_map = {
+            AgentTradeAction.ENTER_LONG: TradeAction.ENTER_LONG,
+            AgentTradeAction.ENTER_SHORT: TradeAction.ENTER_SHORT,
+            AgentTradeAction.WAIT: TradeAction.WAIT,
+            AgentTradeAction.DO_NOTHING: TradeAction.DO_NOTHING,
+            AgentTradeAction.SCALE_IN: TradeAction.SCALE_IN,
+            AgentTradeAction.PARTIAL_PROFIT: TradeAction.PARTIAL_EXIT,
+            AgentTradeAction.TRAIL_STOP: TradeAction.TRAIL_STOP,
+            AgentTradeAction.EXIT: TradeAction.EXIT,
+        }
+        return TradePlan(
+            symbol=ctx.symbol,
+            timeframe=ctx.timeframe,
+            timestamp=ctx.timestamp,
+            action=action_map.get(tp.action, TradeAction.WAIT),
+            entry_price=tp.entry_price,
+            stop_loss=tp.stop_loss,
+            take_profit=tp.take_profit,
+            plan_notes=tp.mcts_path[0] if tp.mcts_path else "",
+        )

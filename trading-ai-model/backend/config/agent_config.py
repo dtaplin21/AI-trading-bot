@@ -23,6 +23,12 @@ TRADING_PHILOSOPHY: dict[str, float | int | str] = {
     "probability_minimum": 0.55,
     "signal_rank_minimum": 65,
     "sample_size_minimum": 100,
+    "daily_loss_stop_pct": 0.02,
+    "max_drawdown_pct": 0.06,
+    "max_contracts_per_trade": 5,
+    "max_open_positions": 3,
+    "min_rr_ratio": 1.5,
+    "consecutive_loss_limit": 4,
     "mark_douglas_principle": (
         "Every prediction is a guess. We count agreements and score probabilities — "
         "never output a trade command from confluence alone."
