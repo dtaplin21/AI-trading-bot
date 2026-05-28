@@ -1,11 +1,9 @@
-"""Trade Planning Agent — beam search (fast) + hierarchical MCTS (deep)."""
+"""Trade Planning Agent — thin pipeline wrapper around mcts.trade_planning_agent."""
 
 from agents.base import BaseAgent
 from agents.pipeline_context import PipelineContext
 from agents.schemas import TradeAction, TradePlan
-from config.agent_config import TRADING_PHILOSOPHY
-from mcts.beam_search_planner import BeamSearchPlanner
-from mcts.mcts_planner import HierarchicalMCTSPlanner
+from mcts.trade_planning_agent import TradePlanningAgent as PlanningRouter
 from pipeline.confluence_report import ConfluenceReport
 
 
@@ -13,9 +11,13 @@ class TradePlanningAgent(BaseAgent):
     name = "trade_planning"
 
     def __init__(self) -> None:
-        loss_aversion = float(TRADING_PHILOSOPHY["loss_aversion_multiplier"])
-        self._beam = BeamSearchPlanner(loss_aversion=loss_aversion)
-        self._mcts = HierarchicalMCTSPlanner()
+        self._routers: dict[str, PlanningRouter] = {}
+
+    def _router(self, symbol: str, timeframe: str) -> PlanningRouter:
+        key = f"{symbol.upper()}:{timeframe}"
+        if key not in self._routers:
+            self._routers[key] = PlanningRouter(symbol, timeframe)
+        return self._routers[key]
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         if not ctx.prediction or not ctx.fused:
@@ -45,61 +47,39 @@ class TradePlanningAgent(BaseAgent):
 
         p_target = float(ctx.prediction.target_before_stop_probability or 0.5)
         p_stop = max(0.0, 1.0 - p_target - 0.15)
+        p_success = p_target
         ev = float(ctx.prediction.expected_value or 0.0)
+        sample_size = int(ctx.fused.features.get("strategy_math_sample_size", ctx.historical_sample_size) or 0)
 
-        # Fast planner — beam search + expectimax on every qualified signal
-        beam_plan = self._beam.plan(
+        router = self._router(ctx.symbol, ctx.timeframe)
+        pipeline_plan = router.plan(
             confluence=ctx.confluence,
+            p_success=p_success,
+            ev_dollars=ev,
+            sample_size=sample_size,
+            signal_rank=ctx.fused.signal_rank,
             p_target=p_target,
             p_stop=p_stop,
-            ev_dollars=ev,
             entry_price=price,
             stop_price=stop,
             target_price=target,
-            symbol=ctx.symbol,
-            timeframe=ctx.timeframe,
-        )
-        ctx.metadata["planner"] = "beam"
-        ctx.metadata["beam_plan_notes"] = beam_plan.plan_notes
-        ctx.metadata["beam_paths"] = [
-            {
-                "action": p.action,
-                "score": p.score,
-                "p_success": p.p_success,
-                "ev_dollars": p.ev_dollars,
-                "notes": p.notes,
-            }
-            for p in self._beam.last_beam
-        ]
-
-        if beam_plan.action == TradeAction.DO_NOTHING and beam_plan.plan_ev <= 0:
-            ctx.trade_plan = self._from_pipeline_plan(beam_plan, ctx.fused.signal_rank)
-            return ctx
-
-        beam_confidence = beam_plan.plan_confidence
-        use_mcts = HierarchicalMCTSPlanner.should_use_mcts(
-            beam_confidence=beam_confidence,
-            confluence=ctx.confluence,
-            signal_rank=ctx.fused.signal_rank,
         )
 
-        if use_mcts:
-            self._mcts.symbol = ctx.symbol
-            pipeline_plan = self._mcts.plan(
-                confluence=ctx.confluence,
-                p_target=p_target,
-                p_stop=p_stop,
-                ev_dollars=ev,
-                entry_price=price,
-                stop_price=stop,
-                target_price=target,
-                timeframe=ctx.timeframe,
-            )
-            ctx.metadata["planner"] = "mcts"
-            ctx.trade_plan = self._from_pipeline_plan(pipeline_plan, ctx.fused.signal_rank)
-            return ctx
+        ctx.metadata["planner"] = router.last_planner
+        if router.last_planner == "beam":
+            ctx.metadata["beam_plan_notes"] = pipeline_plan.plan_notes
+            ctx.metadata["beam_paths"] = [
+                {
+                    "action": p.action,
+                    "score": p.score,
+                    "p_success": p.p_success,
+                    "ev_dollars": p.ev_dollars,
+                    "notes": p.notes,
+                }
+                for p in router._beam.last_beam
+            ]
 
-        ctx.trade_plan = self._from_pipeline_plan(beam_plan, ctx.fused.signal_rank)
+        ctx.trade_plan = self._from_pipeline_plan(pipeline_plan, ctx.fused.signal_rank)
         return ctx
 
     def _from_pipeline_plan(self, plan, signal_rank: int) -> TradePlan:
@@ -118,6 +98,6 @@ class TradePlanningAgent(BaseAgent):
             stop_limit=plan.stop_loss,
             start_condition=f"signal_rank>={signal_rank}",
             stop_condition="stop_loss_hit",
-            wait_condition="beam_wait" if action == TradeAction.WAIT else None,
+            wait_condition="plan_wait" if action == TradeAction.WAIT else None,
             mcts_path=[plan.plan_notes] if plan.plan_notes else [],
         )
