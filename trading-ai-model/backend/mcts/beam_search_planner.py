@@ -22,12 +22,12 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Optional
 
-from config.agent_config import MCTS_CONFIG
+from config.agent_config import MCTS_CONFIG, TRADING_PHILOSOPHY
 from mcts.expectimax_engine import ActionNode, ExpectimaxEngine
 from pipeline.confluence_report import ConfluenceReport
+from pipeline.reward_function import RewardFunction
 from pipeline.schemas import Direction, TradeAction, TradePlan
 
 logger = logging.getLogger(__name__)
@@ -61,11 +61,15 @@ class BeamSearchPlanner:
     def __init__(
         self,
         tick_value: float = 1.25,
-        loss_aversion: float = 2.0,
+        loss_aversion: float | None = None,
     ) -> None:
+        la = loss_aversion if loss_aversion is not None else float(
+            TRADING_PHILOSOPHY["loss_aversion_multiplier"]
+        )
         self.beam_width = int(os.getenv("BEAM_WIDTH", str(MCTS_CONFIG["beam_width"])))
         self.min_ev = float(os.getenv("BEAM_MIN_EV", "0.0"))
-        self._expectimax = ExpectimaxEngine(tick_value=tick_value, loss_aversion=loss_aversion)
+        self._expectimax = ExpectimaxEngine(tick_value=tick_value, loss_aversion=la)
+        self._reward = RewardFunction(loss_aversion=la)
         self._last_beam: list[BeamPath] = []
         logger.info("BeamSearchPlanner: width=%d min_ev=%.2f", self.beam_width, self.min_ev)
 
@@ -88,8 +92,11 @@ class BeamSearchPlanner:
         timeframe: str = "",
     ) -> TradePlan:
         """Run beam search and return the best TradePlan."""
+        from datetime import datetime, timezone
+
         direction = confluence.consensus_direction
 
+        # ── Step 1: Expectimax pre-filter ─────────────────────────────────────
         expectimax_actions = self._expectimax.score_actions(
             p_target=p_target,
             p_stop=p_stop,
@@ -100,13 +107,16 @@ class BeamSearchPlanner:
             target_price=target_price,
         )
 
+        # ── Step 2: Generate beam paths ───────────────────────────────────────
         candidate_paths = self._generate_paths(
             direction, confluence, p_target, p_stop, ev_dollars, expectimax_actions
         )
 
+        # ── Step 3: Score and sort ─────────────────────────────────────────────
         scored = self._score_paths(candidate_paths, confluence)
         scored.sort(key=lambda p: p.score, reverse=True)
 
+        # ── Step 4: Keep top beam_width ───────────────────────────────────────
         beam = scored[: self.beam_width]
         self._last_beam = beam
 
@@ -120,6 +130,7 @@ class BeamSearchPlanner:
                 path.ev_dollars,
             )
 
+        # ── Step 5: Best path → TradePlan ────────────────────────────────────
         if not beam or beam[0].ev_dollars < self.min_ev:
             return TradePlan(
                 symbol=symbol,
@@ -162,6 +173,8 @@ class BeamSearchPlanner:
             plan_notes=best.notes,
         )
 
+    # ─── Path generation ──────────────────────────────────────────────────────
+
     def _generate_paths(
         self,
         direction: int,
@@ -172,7 +185,9 @@ class BeamSearchPlanner:
         expectimax_actions: list[ActionNode],
     ) -> list[BeamPath]:
         paths: list[BeamPath] = []
+        p_chop = max(0.0, 1.0 - p_target - p_stop)
 
+        # Path 1: Enter full size now
         if direction != 0:
             paths.append(
                 BeamPath(
@@ -186,6 +201,7 @@ class BeamSearchPlanner:
                 )
             )
 
+        # Path 2: Enter half size (lower risk, lower reward)
         if direction != 0 and p_stop > 0.25:
             paths.append(
                 BeamPath(
@@ -199,6 +215,7 @@ class BeamSearchPlanner:
                 )
             )
 
+        # Path 3: Wait — if conflict score is borderline
         if confluence.conflict_score > 0.25:
             paths.append(
                 BeamPath(
@@ -212,6 +229,7 @@ class BeamSearchPlanner:
                 )
             )
 
+        # Path 4: Wait for news alignment
         if not confluence.news_aligned:
             paths.append(
                 BeamPath(
@@ -225,6 +243,7 @@ class BeamSearchPlanner:
                 )
             )
 
+        # Path 5: Do nothing — always available
         paths.append(
             BeamPath(
                 action="do_nothing",
@@ -236,6 +255,7 @@ class BeamSearchPlanner:
             )
         )
 
+        # Merge Expectimax scores into paths
         expectimax_map = {a.action: a.risk_adjusted_ev for a in expectimax_actions}
         for p in paths:
             ea_key = (
@@ -256,23 +276,32 @@ class BeamSearchPlanner:
         paths: list[BeamPath],
         confluence: ConfluenceReport,
     ) -> list[BeamPath]:
-        """Score each path combining EV, probability, and confluence."""
+        """Score each path combining EV, probability, confluence, and reward function."""
         for path in paths:
             if path.action == "do_nothing":
                 path.score = 0.0
                 continue
+
+            reward_component = min(
+                1.0, max(0.0, self._reward.score(path.ev_dollars / 100.0))
+            )
             score = (
                 path.p_success * 0.40
-                + min(1.0, max(0.0, path.ev_dollars / 20.0)) * 0.35
+                + reward_component * 0.35
                 + confluence.confluence_score * 0.25
             )
+
+            # Bonus: direction matches strongest cluster
             if (
                 confluence.strongest_cluster
                 and confluence.strongest_cluster.direction == path.direction
             ):
                 score += 0.05
+
+            # Penalty: news conflict
             score -= confluence.news_conflict_score * 0.10
             path.score = round(score, 4)
+
         return paths
 
     def _map_action(self, action: str, direction: int) -> TradeAction:
