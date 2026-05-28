@@ -46,4 +46,5 @@ MCTS_CONFIG: dict[str, float | int] = {
     "exploration_constant": 1.414,
     "confidence_threshold": 0.70,
     "conflict_threshold": 0.30,
+    "beam_width": 4,
 }

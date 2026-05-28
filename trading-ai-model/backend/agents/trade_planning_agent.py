@@ -1,27 +1,21 @@
-"""Trade Planning Agent — hierarchical MCTS action proposals, no execution."""
+"""Trade Planning Agent — beam search (fast) + hierarchical MCTS (deep)."""
 
 from agents.base import BaseAgent
 from agents.pipeline_context import PipelineContext
 from agents.schemas import TradeAction, TradePlan
 from config.agent_config import TRADING_PHILOSOPHY
-from mcts.expectimax_engine import ExpectimaxEngine
+from mcts.beam_search_planner import BeamSearchPlanner
 from mcts.mcts_planner import HierarchicalMCTSPlanner
 from pipeline.confluence_report import ConfluenceReport
-from pipeline.reward_function import BeamSearchScorer, RewardFunction
 
 
 class TradePlanningAgent(BaseAgent):
     name = "trade_planning"
 
     def __init__(self) -> None:
-        self.planner = HierarchicalMCTSPlanner()
-        self._expectimax = ExpectimaxEngine()
-        self._beam = BeamSearchScorer(
-            RewardFunction(
-                loss_aversion=float(TRADING_PHILOSOPHY["loss_aversion_multiplier"])
-            ),
-            beam_width=4,
-        )
+        loss_aversion = float(TRADING_PHILOSOPHY["loss_aversion_multiplier"])
+        self._beam = BeamSearchPlanner(loss_aversion=loss_aversion)
+        self._mcts = HierarchicalMCTSPlanner()
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         if not ctx.prediction or not ctx.fused:
@@ -53,41 +47,45 @@ class TradePlanningAgent(BaseAgent):
         p_stop = max(0.0, 1.0 - p_target - 0.15)
         ev = float(ctx.prediction.expected_value or 0.0)
 
-        # Expectimax pre-filter — wide shallow scoring before deep MCTS
-        expectimax_actions = self._expectimax.score_actions(
-            p_target, p_stop, entry_price=price, stop_price=stop, target_price=target
+        # Fast planner — beam search + expectimax on every qualified signal
+        beam_plan = self._beam.plan(
+            confluence=ctx.confluence,
+            p_target=p_target,
+            p_stop=p_stop,
+            ev_dollars=ev,
+            entry_price=price,
+            stop_price=stop,
+            target_price=target,
+            symbol=ctx.symbol,
+            timeframe=ctx.timeframe,
         )
-        best_action, best_ev = self._expectimax.best_action(p_target, p_stop)
-        ctx.metadata["expectimax_best_action"] = best_action
-        ctx.metadata["expectimax_best_ev"] = best_ev
-        ctx.metadata["expectimax_actions"] = [
-            {"action": a.action, "ev": a.expected_value, "risk_adj_ev": a.risk_adjusted_ev}
-            for a in expectimax_actions
+        ctx.metadata["planner"] = "beam"
+        ctx.metadata["beam_plan_notes"] = beam_plan.plan_notes
+        ctx.metadata["beam_paths"] = [
+            {
+                "action": p.action,
+                "score": p.score,
+                "p_success": p.p_success,
+                "ev_dollars": p.ev_dollars,
+                "notes": p.notes,
+            }
+            for p in self._beam.last_beam
         ]
 
-        positive = self._expectimax.filter_positive_ev(p_target, p_stop)
-        if not positive:
-            ctx.trade_plan = TradePlan(
-                action=TradeAction.DO_NOTHING,
-                wait_condition="expectimax_no_positive_ev",
-                entry_price=price,
-                mcts_path=[f"expectimax:best={best_action}"],
-            )
+        if beam_plan.action == TradeAction.DO_NOTHING and beam_plan.plan_ev <= 0:
+            ctx.trade_plan = self._from_pipeline_plan(beam_plan, ctx.fused.signal_rank)
             return ctx
 
-        beam_confidence = self._beam.score_path(
-            cumulative_r=ev / max(1.0, atr * 10),
-            bars_held=0,
-        )
+        beam_confidence = beam_plan.plan_confidence
         use_mcts = HierarchicalMCTSPlanner.should_use_mcts(
             beam_confidence=beam_confidence,
             confluence=ctx.confluence,
             signal_rank=ctx.fused.signal_rank,
         )
 
-        if use_mcts or ctx.prediction.should_start:
-            self.planner.symbol = ctx.symbol
-            pipeline_plan = self.planner.plan(
+        if use_mcts:
+            self._mcts.symbol = ctx.symbol
+            pipeline_plan = self._mcts.plan(
                 confluence=ctx.confluence,
                 p_target=p_target,
                 p_stop=p_stop,
@@ -97,15 +95,11 @@ class TradePlanningAgent(BaseAgent):
                 target_price=target,
                 timeframe=ctx.timeframe,
             )
+            ctx.metadata["planner"] = "mcts"
             ctx.trade_plan = self._from_pipeline_plan(pipeline_plan, ctx.fused.signal_rank)
             return ctx
 
-        ctx.trade_plan = TradePlan(
-            action=TradeAction.WAIT,
-            wait_condition="mcts_skip",
-            entry_price=price,
-            mcts_path=["skip"],
-        )
+        ctx.trade_plan = self._from_pipeline_plan(beam_plan, ctx.fused.signal_rank)
         return ctx
 
     def _from_pipeline_plan(self, plan, signal_rank: int) -> TradePlan:
@@ -116,7 +110,6 @@ class TradePlanningAgent(BaseAgent):
             "do_nothing": TradeAction.DO_NOTHING,
         }
         action = action_map.get(plan.action.value, TradeAction.WAIT)
-        path = plan.plan_notes.split("|") if plan.plan_notes else []
         return TradePlan(
             action=action,
             entry_price=plan.entry_price,
@@ -125,6 +118,6 @@ class TradePlanningAgent(BaseAgent):
             stop_limit=plan.stop_loss,
             start_condition=f"signal_rank>={signal_rank}",
             stop_condition="stop_loss_hit",
-            wait_condition="mcts_timing" if action == TradeAction.WAIT else None,
+            wait_condition="beam_wait" if action == TradeAction.WAIT else None,
             mcts_path=[plan.plan_notes] if plan.plan_notes else [],
         )
