@@ -31,11 +31,11 @@ HARMONIC_RATIO_TOLERANCE_PCT=3.0
 ELLIOTT_CONFIDENCE_THRESHOLD=0.60
 GANN_RESEARCH_ONLY=true
 
-# LLM explanation (never used for trade execution)
+# LLM — Anthropic only (never used for trade execution)
 LLM_ENABLED=false
-LLM_API_KEY=
-LLM_MODEL=gpt-4o-mini
-LLM_BASE_URL=https://api.openai.com/v1
+ANTHROPIC_API_KEY=
+ANTHROPIC_MODEL=claude-sonnet-4-20250514
+ANTHROPIC_MAX_TOKENS=350
 
 # Paper trading
 PAPER_TRADING_ENABLED=true

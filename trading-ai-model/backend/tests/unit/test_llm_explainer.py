@@ -4,14 +4,15 @@ from datetime import datetime, timezone
 
 from agents.llm_explainer import LLMExplainer
 from agents.schemas import AuditReport, PipelineDecision, PredictionOutput
+from config.settings import get_settings
+from llm.anthropic_client import reset_anthropic_client
 
 
 def test_template_explanation_without_api_key(monkeypatch):
     monkeypatch.setenv("LLM_ENABLED", "false")
-    monkeypatch.setenv("LLM_API_KEY", "")
-    from config.settings import get_settings
-
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     get_settings.cache_clear()
+    reset_anthropic_client()
 
     explainer = LLMExplainer()
     assert explainer.enabled is False

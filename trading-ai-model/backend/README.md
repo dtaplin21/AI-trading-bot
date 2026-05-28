@@ -40,7 +40,7 @@ python scripts/run_scheduled_retrain.py
 
 ### LLM explanations (optional)
 
-Set `LLM_ENABLED=true` and `LLM_API_KEY=...` in `.env`. The LLM only explains decisions — it never executes trades.
+Set `LLM_ENABLED=true` and `ANTHROPIC_API_KEY=...` in `.env`. Anthropic is used for news sentiment and audit explanations only — it never executes trades.
 
 ## Constraint Rules
 

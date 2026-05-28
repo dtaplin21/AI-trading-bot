@@ -30,11 +30,11 @@ class Settings(BaseSettings):
     retrain_schedule_days: int = 7
     data_stale_minutes: int = 15
 
-    # LLM explanation (never used for execution)
+    # LLM — Anthropic only (explanation & news; never executes trades)
     llm_enabled: bool = False
-    llm_api_key: str = ""
-    llm_model: str = "gpt-4o-mini"
-    llm_base_url: str = "https://api.openai.com/v1"
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-sonnet-4-20250514"
+    anthropic_max_tokens: int = 350
 
     max_daily_loss_pct: float = 2.0
     max_drawdown_pct: float = 10.0

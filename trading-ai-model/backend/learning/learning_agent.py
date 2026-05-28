@@ -28,8 +28,9 @@ Safe learning loop (Mark Douglas: the edge proves itself over a series):
   MANUAL APPROVAL → deploy to production
 
 Env:
-  ANTHROPIC_API_KEY          — LLM audit summaries
-  LEARNING_MIN_SAMPLES       (int,   default 100)
+  LLM_ENABLED          — master switch (default false)
+  ANTHROPIC_API_KEY    — API key (never hardcoded; set in .env only)
+  ANTHROPIC_MODEL      — model id (default claude-sonnet-4-20250514)
   LEARNING_RETRAIN_WEEKLY    (bool,  default true)
   LEARNING_PAPER_DAYS        (int,   default 5)
   LEARNING_BRIER_IMPROVEMENT (float, default 0.01)

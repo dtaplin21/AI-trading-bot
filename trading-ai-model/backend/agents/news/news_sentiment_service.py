@@ -17,11 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Optional
-
-import httpx
 
 from agents.news.news_schemas import (
     EventType,
@@ -33,9 +30,9 @@ from agents.news.news_schemas import (
     VolatilityRisk,
 )
 
-logger = logging.getLogger(__name__)
+from llm.anthropic_client import AnthropicClient, get_anthropic_client
 
-ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+logger = logging.getLogger(__name__)
 
 # ─── Keyword maps ─────────────────────────────────────────────────────────────
 
@@ -96,8 +93,13 @@ class NewsSentimentService:
     Rule engine first — LLM only for ambiguous or high-impact items.
     """
 
-    def __init__(self, use_llm: bool = True) -> None:
-        self._use_llm = use_llm and bool(ANTHROPIC_KEY)
+    def __init__(
+        self,
+        use_llm: bool = True,
+        client: AnthropicClient | None = None,
+    ) -> None:
+        self._client = client or get_anthropic_client()
+        self._use_llm = use_llm and self._client.is_configured
 
     async def classify(self, item: RawNewsItem) -> NewsEvent:
         """Full classification pipeline for one news item."""
@@ -301,20 +303,4 @@ In 2-3 sentences, explain:
 
 Be direct and specific. No preamble."""
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": ANTHROPIC_KEY,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": "claude-sonnet-4-20250514",
-                    "max_tokens": 200,
-                    "messages": [{"role": "user", "content": prompt}],
-                },
-            )
-            r.raise_for_status()
-            data = r.json()
-            return data["content"][0]["text"].strip()
+        return await self._client.complete(user=prompt, max_tokens=200, temperature=0.3)

@@ -19,7 +19,7 @@ This is called BEFORE MCTS for a fast pre-filter.
 MCTS does deep search. Expectimax does wide shallow scoring.
 
 Env:
-  ANTHROPIC_API_KEY — used if LLM explanation of action is requested
+  ANTHROPIC_API_KEY — via llm.anthropic_client (if LLM explanation of action is requested)
   LOSS_AVERSION_MULTIPLIER (default 2.0, from TRADING_PHILOSOPHY)
 """
 from __future__ import annotations

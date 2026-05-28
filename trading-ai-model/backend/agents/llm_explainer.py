@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-import urllib.error
-import urllib.request
 
 from agents.schemas import AuditReport, PipelineDecision
-from config.settings import get_settings
+from llm.anthropic_client import AnthropicClient, get_anthropic_client
 
 logger = logging.getLogger(__name__)
 
@@ -23,14 +21,14 @@ Rules:
 
 
 class LLMExplainer:
-    """Optional LLM layer for explainability. Disabled without API key."""
+    """Optional Anthropic layer for explainability. Disabled without API key."""
 
-    def __init__(self):
-        settings = get_settings()
-        self.enabled = settings.llm_enabled and bool(settings.llm_api_key)
-        self.api_key = settings.llm_api_key
-        self.model = settings.llm_model
-        self.base_url = settings.llm_base_url.rstrip("/")
+    def __init__(self, client: AnthropicClient | None = None) -> None:
+        self._client = client or get_anthropic_client()
+
+    @property
+    def enabled(self) -> bool:
+        return self._client.is_configured
 
     def explain(self, decision: PipelineDecision, audit: AuditReport) -> str:
         template = self._template_explanation(decision, audit)
@@ -78,26 +76,9 @@ class LLMExplainer:
             },
             default=str,
         )
-
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"Explain this trading pipeline decision:\n{user_content}"},
-            ],
-            "max_tokens": 350,
-            "temperature": 0.3,
-        }
-
-        req = urllib.request.Request(
-            f"{self.base_url}/chat/completions",
-            data=json.dumps(payload).encode(),
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
+        return self._client.complete_sync(
+            system=SYSTEM_PROMPT,
+            user=f"Explain this trading pipeline decision:\n{user_content}",
+            max_tokens=350,
+            temperature=0.3,
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            body = json.loads(resp.read())
-        return body["choices"][0]["message"]["content"].strip()
