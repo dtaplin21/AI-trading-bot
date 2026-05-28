@@ -154,6 +154,7 @@ class PipelineDecision(BaseModel):
     timeframe: str
     timestamp: datetime
     chart: Optional[ChartStructure] = None
+    confluence: Optional[Any] = None  # ConfluenceReport — Any avoids circular import
     fused_features: Optional[FusedFeatures] = None
     prediction: Optional[PredictionOutput] = None
     trade_plan: Optional[TradePlan] = None

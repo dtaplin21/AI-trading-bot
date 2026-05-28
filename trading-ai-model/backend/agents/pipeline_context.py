@@ -47,6 +47,7 @@ class PipelineContext:
             timeframe=self.timeframe,
             timestamp=self.timestamp,
             chart=self.chart,
+            confluence=self.confluence,
             fused_features=self.fused,
             prediction=self.prediction,
             trade_plan=self.trade_plan,

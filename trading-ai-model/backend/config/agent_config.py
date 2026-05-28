@@ -19,6 +19,10 @@ METHOD_WEIGHTS: dict[str, float] = {
 TRADING_PHILOSOPHY: dict[str, float | int | str] = {
     "confluence_minimum_methods": 3,
     "max_conflict_score": 0.45,
+    "loss_aversion_multiplier": 2.0,
+    "probability_minimum": 0.55,
+    "signal_rank_minimum": 65,
+    "sample_size_minimum": 100,
     "mark_douglas_principle": (
         "Every prediction is a guess. We count agreements and score probabilities — "
         "never output a trade command from confluence alone."
