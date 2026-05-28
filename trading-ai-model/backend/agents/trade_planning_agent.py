@@ -4,6 +4,7 @@ from agents.base import BaseAgent
 from agents.pipeline_context import PipelineContext
 from agents.schemas import TradeAction, TradePlan
 from config.agent_config import TRADING_PHILOSOPHY
+from mcts.expectimax_engine import ExpectimaxEngine
 from mcts.mcts_planner import HierarchicalMCTSPlanner
 from pipeline.confluence_report import ConfluenceReport
 from pipeline.reward_function import BeamSearchScorer, RewardFunction
@@ -14,6 +15,7 @@ class TradePlanningAgent(BaseAgent):
 
     def __init__(self) -> None:
         self.planner = HierarchicalMCTSPlanner()
+        self._expectimax = ExpectimaxEngine()
         self._beam = BeamSearchScorer(
             RewardFunction(
                 loss_aversion=float(TRADING_PHILOSOPHY["loss_aversion_multiplier"])
@@ -50,6 +52,28 @@ class TradePlanningAgent(BaseAgent):
         p_target = float(ctx.prediction.target_before_stop_probability or 0.5)
         p_stop = max(0.0, 1.0 - p_target - 0.15)
         ev = float(ctx.prediction.expected_value or 0.0)
+
+        # Expectimax pre-filter — wide shallow scoring before deep MCTS
+        expectimax_actions = self._expectimax.score_actions(
+            p_target, p_stop, entry_price=price, stop_price=stop, target_price=target
+        )
+        best_action, best_ev = self._expectimax.best_action(p_target, p_stop)
+        ctx.metadata["expectimax_best_action"] = best_action
+        ctx.metadata["expectimax_best_ev"] = best_ev
+        ctx.metadata["expectimax_actions"] = [
+            {"action": a.action, "ev": a.expected_value, "risk_adj_ev": a.risk_adjusted_ev}
+            for a in expectimax_actions
+        ]
+
+        positive = self._expectimax.filter_positive_ev(p_target, p_stop)
+        if not positive:
+            ctx.trade_plan = TradePlan(
+                action=TradeAction.DO_NOTHING,
+                wait_condition="expectimax_no_positive_ev",
+                entry_price=price,
+                mcts_path=[f"expectimax:best={best_action}"],
+            )
+            return ctx
 
         beam_confidence = self._beam.score_path(
             cumulative_r=ev / max(1.0, atr * 10),

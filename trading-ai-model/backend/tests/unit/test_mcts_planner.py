@@ -1,12 +1,51 @@
-"""Unit tests for hierarchical MCTS planner."""
+"""Unit tests for hierarchical MCTS planner and expectimax engine."""
 
 from datetime import datetime, timezone
 
 import pytest
 
-from mcts.expectimax_engine import ExpectimaxEngine
+from mcts.expectimax_engine import ActionNode, ExpectimaxEngine, OutcomeNode
 from mcts.mcts_planner import HierarchicalMCTSPlanner, MCTSNode
 from pipeline.confluence_report import ConfluenceReport
+
+
+def test_outcome_node_ev():
+    node = OutcomeNode("target", 0.6, 250.0, 0.6 * 250.0)
+    assert node.ev == pytest.approx(150.0)
+
+
+def test_action_node_compute_ev():
+    action = ActionNode(
+        action="enter_full",
+        outcomes=[
+            OutcomeNode("target", 0.6, 250.0, 150.0),
+            OutcomeNode("stop", 0.3, -125.0, -37.5),
+            OutcomeNode("chop", 0.1, -25.0, -2.5),
+        ],
+    )
+    action.compute_ev(loss_aversion=2.0)
+    assert action.expected_value == pytest.approx(110.0)
+    assert action.risk_adjusted_ev != action.expected_value
+
+
+def test_expectimax_score_actions_sorted():
+    engine = ExpectimaxEngine(tick_value=1.25, loss_aversion=2.0)
+    actions = engine.score_actions(p_target=0.65, p_stop=0.25)
+    assert len(actions) == 4
+    assert actions[0].risk_adjusted_ev >= actions[-1].risk_adjusted_ev
+
+
+def test_expectimax_best_action_positive_ev():
+    engine = ExpectimaxEngine(tick_value=1.25, loss_aversion=2.0)
+    action, ev = engine.best_action(p_target=0.65, p_stop=0.20)
+    assert action in {"enter_full", "enter_half", "wait", "do_nothing"}
+    assert isinstance(ev, float)
+
+
+def test_expectimax_filter_positive_ev():
+    engine = ExpectimaxEngine(tick_value=1.25, loss_aversion=2.0)
+    positive = engine.filter_positive_ev(p_target=0.70, p_stop=0.15)
+    assert all(a.risk_adjusted_ev > 0 for a in positive)
 
 
 @pytest.fixture
@@ -34,12 +73,6 @@ def planner(monkeypatch):
 
     importlib.reload(mp)
     return mp.HierarchicalMCTSPlanner(symbol="MES")
-
-
-def test_expectimax_expected_value():
-    engine = ExpectimaxEngine(tick_value=1.25, loss_aversion=2.0)
-    ev = engine.expected_value(p_target=0.6, p_stop=0.3, reward_r=2.0, risk_r=1.0)
-    assert ev > 0
 
 
 def test_mcts_node_ucb_and_expand():

@@ -181,6 +181,28 @@ class HierarchicalMCTSPlanner:
             "news_blocked": confluence.news_trading_blocked,
         }
 
+        # Expectimax pre-filter — skip MCTS when no action has positive EV
+        positive_actions = self._expectimax.filter_positive_ev(
+            p_target, p_stop, reward_r, risk_r
+        )
+        if not positive_actions:
+            logger.info("MCTS[%s]: expectimax pre-filter — no positive EV actions", self.symbol)
+            return self._decode_plan(
+                [MCTSNode(state={**initial_state, "L1": "skip"}, level=1, action="skip")],
+                confluence,
+                entry_price,
+                stop_price,
+                target_price,
+                timeframe,
+                p_target,
+                ev_dollars,
+                datetime.now(tz=timezone.utc),
+            )
+
+        best_action, best_ev = self._expectimax.best_action(p_target, p_stop, reward_r, risk_r)
+        initial_state["expectimax_best"] = best_action
+        initial_state["expectimax_ev"] = best_ev
+
         root = MCTSNode(state=initial_state, level=0)
 
         for _ in range(ROLLOUTS):
