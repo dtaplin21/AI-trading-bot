@@ -1,0 +1,6 @@
+{
+  "venvPath": "trading-ai-model/backend",
+  "venv": ".venv",
+  "pythonVersion": "3.13",
+  "extraPaths": ["trading-ai-model/backend"]
+}
