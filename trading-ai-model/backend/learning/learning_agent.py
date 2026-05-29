@@ -60,6 +60,7 @@ RETRAIN_STATE_PATH = Path(os.getenv("LEARNING_RETRAIN_STATE", "logs/learning_ret
 
 META_COLS = frozenset(
     {
+        "snapshot_id",
         "label",
         "_symbol",
         "_timeframe",

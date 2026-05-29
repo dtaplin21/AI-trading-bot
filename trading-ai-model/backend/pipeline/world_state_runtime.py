@@ -12,7 +12,13 @@ _store: Optional[WorldStateStore] = None
 def get_world_state_store(db_writer=None) -> WorldStateStore:
     global _store
     if _store is None:
-        _store = WorldStateStore(db_writer=db_writer)
+        writer = db_writer
+        if writer is None:
+            from data.storage.world_state_db_writer import build_world_state_writer
+
+            writer = build_world_state_writer()
+        _store = WorldStateStore(db_writer=writer)
+        _store.hydrate()
     return _store
 
 

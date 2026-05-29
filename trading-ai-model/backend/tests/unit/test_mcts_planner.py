@@ -97,6 +97,9 @@ def test_hierarchical_mcts_returns_trade_plan(planner, confluence_bullish):
     assert plan.action.value in {"enter_long", "enter_short", "wait", "do_nothing"}
     assert plan.mcts_iterations >= 80
     assert "MCTS L1-L5" in plan.plan_notes or plan.plan_notes == "MCTS L1: skip"
+    assert planner.last_audit is not None
+    assert planner.last_audit["planner"] == "mcts"
+    assert isinstance(planner.last_audit["best_path"], list)
 
 
 def test_should_use_mcts_on_high_conflict(confluence_bullish):

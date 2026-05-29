@@ -138,6 +138,7 @@ class HierarchicalMCTSPlanner:
         self.tick_value = tick_value
         self.symbol = symbol
         self._expectimax = ExpectimaxEngine(tick_value=tick_value, loss_aversion=LOSS_AVERSION)
+        self.last_audit: dict | None = None
 
     @staticmethod
     def should_use_mcts(
@@ -187,6 +188,7 @@ class HierarchicalMCTSPlanner:
         )
         if not positive_actions:
             logger.info("MCTS[%s]: expectimax pre-filter — no positive EV actions", self.symbol)
+            self.last_audit = None
             return self._decode_plan(
                 [MCTSNode(state={**initial_state, "L1": "skip"}, level=1, action="skip")],
                 confluence,
@@ -219,6 +221,19 @@ class HierarchicalMCTSPlanner:
             ROLLOUTS,
             " → ".join(n.action for n in path[1:]),
             path[-1].avg_value if len(path) > 1 else 0.0,
+        )
+
+        from mcts.planner_audit import build_mcts_audit
+
+        self.last_audit = build_mcts_audit(
+            root,
+            path,
+            rollouts=ROLLOUTS,
+            exploration_c=EXPLORATION,
+            route_reason=(
+                f"conf={confluence.confluence_score:.2f} "
+                f"conflict={confluence.conflict_score:.2f}"
+            ),
         )
 
         return self._decode_plan(

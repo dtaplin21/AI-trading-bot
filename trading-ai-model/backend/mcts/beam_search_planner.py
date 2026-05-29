@@ -71,6 +71,7 @@ class BeamSearchPlanner:
         self._expectimax = ExpectimaxEngine(tick_value=tick_value, loss_aversion=la)
         self._reward = RewardFunction(loss_aversion=la)
         self._last_beam: list[BeamPath] = []
+        self.last_audit: dict | None = None
         logger.info("BeamSearchPlanner: width=%d min_ev=%.2f", self.beam_width, self.min_ev)
 
     @property
@@ -119,6 +120,14 @@ class BeamSearchPlanner:
         # ── Step 4: Keep top beam_width ───────────────────────────────────────
         beam = scored[: self.beam_width]
         self._last_beam = beam
+
+        from mcts.planner_audit import build_beam_audit
+
+        self.last_audit = build_beam_audit(
+            beam,
+            beam_width=self.beam_width,
+            route_reason=f"conf={confluence.confluence_score:.2f} beam_ok",
+        )
 
         for i, path in enumerate(beam):
             logger.debug(

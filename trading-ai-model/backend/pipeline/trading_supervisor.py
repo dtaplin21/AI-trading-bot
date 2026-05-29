@@ -40,6 +40,7 @@ from pipeline.feature_fusion_news_patch import (
     NewsAgentProtocol,
     fetch_news_features,
 )
+from pipeline.planner_audit_service import persist_planner_audit
 from pipeline.probability_gate import ProbabilityGate
 from pipeline.schemas import (
     AuditReport,
@@ -238,6 +239,18 @@ class TradingPipelineSupervisor:
                 signal_rank=fused.signal_rank,
                 p_target=prediction.target_hit_probability,
                 p_stop=prediction.continuation_probability,
+            )
+
+            persist_planner_audit(
+                self._planner.last_audit,
+                snapshot_id=result.snapshot_id,
+                symbol=self.symbol,
+                timeframe=bar.timeframe or self.timeframe,
+                confluence=result.confluence,
+                plan=result.plan,
+                p_success=prediction.trade_start_probability,
+                ev_dollars=prediction.expected_value,
+                signal_rank=fused.signal_rank,
             )
 
             result.risk = self._risk_eng.approve(

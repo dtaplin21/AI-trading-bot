@@ -99,6 +99,56 @@ CREATE TABLE IF NOT EXISTS symbol_news_impacts (
 );
 """
 
+CONFLUENCE_OUTCOMES_DDL = """
+CREATE TABLE IF NOT EXISTS confluence_outcomes (
+    snapshot_id         TEXT PRIMARY KEY,
+    symbol              TEXT NOT NULL,
+    timeframe           TEXT NOT NULL,
+    regime              TEXT,
+    signal_rank         INT,
+    predicted_p_success DOUBLE PRECISION,
+    predicted_ev        DOUBLE PRECISION,
+    outcome_label       SMALLINT NOT NULL,
+    actual_pnl          DOUBLE PRECISION,
+    actual_r_multiple   DOUBLE PRECISION,
+    hit_target          BOOLEAN NOT NULL DEFAULT FALSE,
+    hit_stop            BOOLEAN NOT NULL DEFAULT FALSE,
+    scored_at           TIMESTAMPTZ,
+    closed_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    training_row        JSONB NOT NULL,
+    confluence          JSONB
+);
+"""
+
+PLANNER_AUDITS_DDL = """
+CREATE TABLE IF NOT EXISTS planner_decision_audits (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    snapshot_id         TEXT,
+    symbol              TEXT NOT NULL,
+    timeframe           TEXT NOT NULL,
+    decided_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    planner             TEXT NOT NULL,
+    route_reason        TEXT,
+    confluence_score    DOUBLE PRECISION,
+    conflict_score      DOUBLE PRECISION,
+    news_aligned        BOOLEAN,
+    p_success           DOUBLE PRECISION,
+    ev_dollars          DOUBLE PRECISION,
+    signal_rank         INT,
+    chosen_action       TEXT,
+    plan_ev             DOUBLE PRECISION,
+    plan_confidence     DOUBLE PRECISION,
+    rollouts            INT,
+    exploration_c       DOUBLE PRECISION,
+    root_value          DOUBLE PRECISION,
+    best_path           JSONB,
+    path_state          JSONB,
+    alternative_paths   JSONB,
+    search_stats        JSONB,
+    full_audit          JSONB NOT NULL
+);
+"""
+
 
 class TimescaleStore:
     """Postgres/TimescaleDB store with graceful fallback when DB unavailable."""
@@ -122,6 +172,8 @@ class TimescaleStore:
                     cur.execute(MODEL_REGISTRY_DDL)
                     cur.execute(NEWS_EVENTS_DDL)
                     cur.execute(SYMBOL_IMPACTS_DDL)
+                    cur.execute(CONFLUENCE_OUTCOMES_DDL)
+                    cur.execute(PLANNER_AUDITS_DDL)
                     cur.execute(NEWS_TABLES_DDL)
                     try:
                         cur.execute(NEWS_EVENTS_V2_COLUMNS)
@@ -419,6 +471,134 @@ class TimescaleStore:
                 cols = [d[0] for d in cur.description]
                 rows = [dict(zip(cols, r)) for r in cur.fetchall()]
         return [row_to_economic_event(r) for r in rows]
+
+    def insert_confluence_outcome(self, row: dict, confluence: dict | None = None) -> None:
+        """Upsert one labeled training row for the learning loop."""
+        if not self._available:
+            return
+        sql = """
+            INSERT INTO confluence_outcomes (
+                snapshot_id, symbol, timeframe, regime, signal_rank,
+                predicted_p_success, predicted_ev, outcome_label,
+                actual_pnl, actual_r_multiple, hit_target, hit_stop,
+                scored_at, closed_at, training_row, confluence
+            ) VALUES (
+                %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb
+            )
+            ON CONFLICT (snapshot_id) DO UPDATE SET
+                outcome_label = EXCLUDED.outcome_label,
+                actual_pnl = EXCLUDED.actual_pnl,
+                actual_r_multiple = EXCLUDED.actual_r_multiple,
+                hit_target = EXCLUDED.hit_target,
+                hit_stop = EXCLUDED.hit_stop,
+                closed_at = EXCLUDED.closed_at,
+                training_row = EXCLUDED.training_row,
+                confluence = COALESCE(EXCLUDED.confluence, confluence_outcomes.confluence)
+        """
+        scored_raw = row.get("_timestamp")
+        scored_at = None
+        if scored_raw:
+            try:
+                scored_at = datetime.fromisoformat(str(scored_raw).replace("Z", "+00:00"))
+            except ValueError:
+                scored_at = None
+        closed_at = datetime.now(tz=timezone.utc)
+        payload = json.dumps(row, default=str)
+        conf_payload = json.dumps(confluence, default=str) if confluence else None
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql,
+                    (
+                        row.get("snapshot_id"),
+                        row.get("_symbol"),
+                        row.get("_timeframe"),
+                        row.get("_regime"),
+                        row.get("signal_rank"),
+                        row.get("predicted_p_success"),
+                        row.get("predicted_ev"),
+                        row.get("label"),
+                        row.get("actual_pnl"),
+                        row.get("actual_r"),
+                        bool(row.get("hit_target")),
+                        bool(row.get("hit_stop")),
+                        scored_at,
+                        closed_at,
+                        payload,
+                        conf_payload,
+                    ),
+                )
+            conn.commit()
+
+    def load_confluence_outcomes(self, limit: int = 50000) -> list[dict]:
+        """Load labeled training rows newest-first."""
+        if not self._available:
+            return []
+        sql = """
+            SELECT training_row FROM confluence_outcomes
+            ORDER BY closed_at DESC
+            LIMIT %s
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (limit,))
+                rows = cur.fetchall()
+        return [r[0] for r in rows if r and r[0]]
+
+    def insert_planner_audit(self, record: dict) -> None:
+        if not self._available:
+            return
+        sql = """
+            INSERT INTO planner_decision_audits (
+                snapshot_id, symbol, timeframe, planner, route_reason,
+                confluence_score, conflict_score, news_aligned,
+                p_success, ev_dollars, signal_rank,
+                chosen_action, plan_ev, plan_confidence,
+                rollouts, exploration_c, root_value,
+                best_path, path_state, alternative_paths, search_stats, full_audit
+            ) VALUES (
+                %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                %s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb
+            )
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql,
+                    (
+                        record.get("snapshot_id"),
+                        record.get("symbol"),
+                        record.get("timeframe"),
+                        record.get("planner"),
+                        record.get("route_reason"),
+                        record.get("confluence_score"),
+                        record.get("conflict_score"),
+                        record.get("news_aligned"),
+                        record.get("p_success"),
+                        record.get("ev_dollars"),
+                        record.get("signal_rank"),
+                        record.get("chosen_action"),
+                        record.get("plan_ev"),
+                        record.get("plan_confidence"),
+                        record.get("rollouts"),
+                        record.get("exploration_c"),
+                        record.get("root_value"),
+                        json.dumps(record.get("best_path"), default=str)
+                        if record.get("best_path") is not None
+                        else None,
+                        json.dumps(record.get("path_state"), default=str)
+                        if record.get("path_state") is not None
+                        else None,
+                        json.dumps(record.get("alternative_paths"), default=str)
+                        if record.get("alternative_paths") is not None
+                        else None,
+                        json.dumps(record.get("search_stats"), default=str)
+                        if record.get("search_stats") is not None
+                        else None,
+                        json.dumps(record.get("full_audit"), default=str),
+                    ),
+                )
+            conn.commit()
 
     def _table_exists(self, cur, table: str) -> bool:
         cur.execute(

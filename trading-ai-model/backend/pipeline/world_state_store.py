@@ -26,13 +26,20 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Protocol, runtime_checkable
 
 from pipeline.confluence_report import ConfluenceReport
+from pipeline.training_archive import load_training_rows, merge_training_rows
 
 logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
 class WorldStateDbWriter(Protocol):
-    async def save_snapshot(self, row: dict) -> None: ...
+    async def save_snapshot(
+        self, row: dict, confluence: dict | None = None
+    ) -> None: ...
+
+    def save_snapshot_sync(self, row: dict, confluence: dict | None = None) -> None: ...
+
+    def load_training_rows(self, limit: int = 50000) -> list[dict]: ...
 
 
 class WorldStateSnapshot:
@@ -119,6 +126,7 @@ class WorldStateSnapshot:
 
         c = self.confluence
         return {
+            "snapshot_id": self.snapshot_id,
             "label": self.outcome_label,
             "_symbol": self.symbol,
             "_timeframe": self.timeframe,
@@ -170,9 +178,28 @@ class WorldStateStore:
     def __init__(self, db_writer: WorldStateDbWriter | None = None) -> None:
         self._snapshots: dict[str, WorldStateSnapshot] = {}
         self._db: WorldStateDbWriter | None = db_writer
+        self._archived_rows: list[dict] = []
+        self._hydrated = False
         self._method_correct: defaultdict[str, int] = defaultdict(int)
         self._method_incorrect: defaultdict[str, int] = defaultdict(int)
         logger.info("WorldStateStore initialized")
+
+    def hydrate(self) -> None:
+        """Load labeled rows from JSONL archive + DB into memory for retrain."""
+        if self._hydrated:
+            return
+        file_rows = load_training_rows()
+        db_rows: list[dict] = []
+        if self._db and hasattr(self._db, "load_training_rows"):
+            db_rows = self._db.load_training_rows()
+        self._archived_rows = merge_training_rows(file_rows, db_rows)
+        self._hydrated = True
+        logger.info(
+            "WorldStateStore: hydrated %d archived training rows (file=%d db=%d)",
+            len(self._archived_rows),
+            len(file_rows),
+            len(db_rows),
+        )
 
     def store_snapshot(
         self,
@@ -230,23 +257,31 @@ class WorldStateStore:
         if self._db:
             row = snap.to_training_row()
             if row:
-                self._persist_row(row)
+                confluence_json = None
+                try:
+                    confluence_json = snap.confluence.model_dump(mode="json")
+                except Exception:
+                    pass
+                self._persist_row(row, confluence=confluence_json)
 
         return snap
 
-    def _persist_row(self, row: dict) -> None:
+    def _persist_row(self, row: dict, confluence: dict | None = None) -> None:
         db = self._db
         if db is None:
+            from pipeline.training_archive import append_training_row
+
+            append_training_row(row)
             return
         try:
             import asyncio
 
             loop = asyncio.get_running_loop()
-            loop.create_task(db.save_snapshot(row))
+            loop.create_task(db.save_snapshot(row, confluence=confluence))
         except RuntimeError:
             save_sync = getattr(db, "save_snapshot_sync", None)
             if callable(save_sync):
-                save_sync(row)
+                save_sync(row, confluence=confluence)
             else:
                 logger.debug("WorldState: no event loop for async db write")
 
@@ -265,6 +300,8 @@ class WorldStateStore:
         """
         cutoff = datetime.now(tz=timezone.utc) - timedelta(days=last_n_days)
         rows: list[dict] = []
+        seen: set[str] = set()
+
         for snap in self._snapshots.values():
             if snap.outcome_label is None:
                 continue
@@ -286,6 +323,38 @@ class WorldStateStore:
             row = snap.to_training_row()
             if row:
                 rows.append(row)
+                if row.get("snapshot_id"):
+                    seen.add(row["snapshot_id"])
+
+        if not self._hydrated:
+            self.hydrate()
+
+        for row in self._archived_rows:
+            sid = row.get("snapshot_id")
+            if sid and sid in seen:
+                continue
+            ts_raw = row.get("_timestamp")
+            if ts_raw:
+                try:
+                    ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    if ts < cutoff:
+                        continue
+                except ValueError:
+                    pass
+            if symbol and row.get("_symbol") != symbol:
+                continue
+            if timeframe and row.get("_timeframe") != timeframe:
+                continue
+            if regime and row.get("_regime") != regime:
+                continue
+            if int(row.get("signal_rank") or 0) < min_rank:
+                continue
+            rows.append(row)
+            if sid:
+                seen.add(sid)
+
         return rows
 
     def find_similar_setups(

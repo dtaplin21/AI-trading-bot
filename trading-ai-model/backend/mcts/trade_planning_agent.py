@@ -62,6 +62,7 @@ class TradePlanningAgent:
         self.symbol = symbol
         self.timeframe = timeframe
         self.last_planner = "none"
+        self.last_audit: dict | None = None
         tick_value = float(
             os.getenv(
                 f"TICK_VALUE_{symbol.upper()}",
@@ -95,6 +96,7 @@ class TradePlanningAgent:
         gate = self._gate.check(p_success, ev_dollars, sample_size, signal_rank)
         if not gate.passed:
             self.last_planner = "gate"
+            self.last_audit = None
             logger.info("TradePlanning: gate failed — %s", "; ".join(gate.failures[:1]))
             return TradePlan(
                 symbol=self.symbol,
@@ -115,6 +117,7 @@ class TradePlanningAgent:
         )
         if best_ev <= 0 or best_action == "do_nothing":
             self.last_planner = "expectimax"
+            self.last_audit = None
             logger.info(
                 "TradePlanning: Expectimax best=%s ev=$%.2f — do nothing",
                 best_action,
@@ -144,7 +147,7 @@ class TradePlanningAgent:
                 confluence.confluence_score,
                 confluence.conflict_score,
             )
-            return self._mcts.plan(
+            plan = self._mcts.plan(
                 confluence=confluence,
                 p_target=p_target,
                 p_stop=p_stop,
@@ -156,13 +159,15 @@ class TradePlanningAgent:
                 target_price=target_price,
                 timeframe=self.timeframe,
             )
+            self.last_audit = self._mcts.last_audit
+            return plan
 
         self.last_planner = "beam"
         logger.info(
             "TradePlanning: routing to Beam | conf=%.2f",
             confluence.confluence_score,
         )
-        return self._beam.plan(
+        plan = self._beam.plan(
             confluence=confluence,
             p_target=p_target,
             p_stop=p_stop,
@@ -175,3 +180,5 @@ class TradePlanningAgent:
             symbol=self.symbol,
             timeframe=self.timeframe,
         )
+        self.last_audit = self._beam.last_audit
+        return plan

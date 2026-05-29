@@ -40,8 +40,13 @@ def _report(
 
 
 @pytest.fixture
-def store():
+def store(tmp_path, monkeypatch):
     reset_world_state_store()
+    archive = tmp_path / "training_rows.jsonl"
+    archive.touch()
+    import pipeline.training_archive as ta
+
+    monkeypatch.setattr(ta, "TRAINING_ROWS_PATH", archive)
     return WorldStateStore()
 
 
