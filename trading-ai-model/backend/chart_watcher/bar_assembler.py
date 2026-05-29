@@ -1,64 +1,137 @@
-"""Multi-timeframe bar assembly from 1m (or native) candles."""
+"""
+chart_watcher/bar_assembler.py
 
+Assembles ticks or 1-minute candles into clean OHLCV bars
+for every configured timeframe (1m, 3m, 5m, 15m, 1h, …).
+
+Two input modes:
+  tick mode   — raw trade prints → all intraday timeframes (< 1 day)
+  candle mode — pre-built OHLCV candles from broker/feed → configured TFs
+
+Anti-look-ahead: a bar is only emitted when superseded by a newer period.
+The current open bar is never forwarded to the pipeline.
+
+Env:
+  WATCHER_TIMEFRAMES   comma-separated, e.g. "1m,5m,15m,1h"
+"""
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Optional, Union
 
 from pipeline.schemas import OHLCV
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TIMEFRAMES = ["1m", "5m", "15m", "1h"]
+_tf_env = os.getenv("WATCHER_TIMEFRAMES", "1m,5m,15m,1h")
+DEFAULT_TIMEFRAMES = [tf.strip() for tf in _tf_env.split(",") if tf.strip()]
 
-OnBarComplete = Callable[[OHLCV], Awaitable[None]]
+TF_MINUTES: dict[str, int] = {
+    "1m": 1,
+    "3m": 3,
+    "5m": 5,
+    "10m": 10,
+    "15m": 15,
+    "30m": 30,
+    "1h": 60,
+    "4h": 240,
+}
+
+# Tick mode rolls up into every intraday timeframe (strictly under one day)
+INTRADAY_TIMEFRAMES: list[str] = sorted(
+    (tf for tf, mins in TF_MINUTES.items() if mins < 24 * 60),
+    key=lambda t: TF_MINUTES[t],
+)
+
+OnBarComplete = Callable[[OHLCV], Union[Awaitable[None], None]]
+_ONE_DAY_MINUTES = 24 * 60
 
 
 def timeframe_to_seconds(tf: str) -> int:
-    tf = tf.strip().lower()
-    if tf.endswith("m"):
-        return int(tf[:-1]) * 60
-    if tf.endswith("h"):
-        return int(tf[:-1]) * 3600
-    if tf.endswith("d"):
-        return int(tf[:-1]) * 86400
-    raise ValueError(f"Unsupported timeframe: {tf}")
+    mins = TF_MINUTES.get(tf.strip().lower())
+    if mins is None:
+        raise ValueError(f"Unsupported timeframe: {tf}")
+    return mins * 60
 
 
-def _bucket_start(ts: datetime, period_sec: int) -> datetime:
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    epoch = int(ts.timestamp())
-    aligned = epoch - (epoch % period_sec)
-    return datetime.fromtimestamp(aligned, tz=timezone.utc)
+def _utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
-class _Bucket:
-    __slots__ = ("open", "high", "low", "close", "volume", "start", "count")
+def _floor_timestamp(dt: datetime, tf_minutes: int) -> datetime:
+    """Snap a datetime down to the nearest tf_minutes wall-clock boundary."""
+    dt = _utc(dt)
+    total_minutes = dt.hour * 60 + dt.minute
+    floored = (total_minutes // tf_minutes) * tf_minutes
+    return dt.replace(
+        hour=floored // 60,
+        minute=floored % 60,
+        second=0,
+        microsecond=0,
+    )
 
-    def __init__(self, bar: OHLCV) -> None:
-        self.open = bar.open
-        self.high = bar.high
-        self.low = bar.low
-        self.close = bar.close
-        self.volume = bar.volume
-        self.start = bar.timestamp
-        self.count = 1
 
-    def update(self, bar: OHLCV) -> None:
+class OpenBar:
+    """One partially-built bar for one symbol+timeframe."""
+
+    __slots__ = (
+        "symbol",
+        "timeframe",
+        "open_time",
+        "close_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "tick_count",
+    )
+
+    def __init__(
+        self,
+        symbol: str,
+        timeframe: str,
+        open_time: datetime,
+        tf_minutes: int,
+        first_price: float,
+        first_volume: float = 0.0,
+    ) -> None:
+        self.symbol = symbol
+        self.timeframe = timeframe
+        self.open_time = open_time
+        self.close_time = open_time + timedelta(minutes=tf_minutes)
+        self.open = first_price
+        self.high = first_price
+        self.low = first_price
+        self.close = first_price
+        self.volume = first_volume
+        self.tick_count = 1
+
+    def update(self, price: float, volume: float = 0.0) -> None:
+        self.high = max(self.high, price)
+        self.low = min(self.low, price)
+        self.close = price
+        self.volume += volume
+        self.tick_count += 1
+
+    def update_from_candle(self, bar: OHLCV) -> None:
         self.high = max(self.high, bar.high)
         self.low = min(self.low, bar.low)
         self.close = bar.close
         self.volume += bar.volume
-        self.count += 1
+        self.tick_count += 1
 
-    def to_ohlcv(self, symbol: str, timeframe: str) -> OHLCV:
+    def to_ohlcv(self) -> OHLCV:
         return OHLCV(
-            symbol=symbol,
-            timeframe=timeframe,
-            timestamp=self.start,
+            symbol=self.symbol,
+            timeframe=self.timeframe,
+            timestamp=self.open_time,
             open=self.open,
             high=self.high,
             low=self.low,
@@ -69,7 +142,9 @@ class _Bucket:
 
 class BarAssembler:
     """
-    Ingests 1m bars (or native-TF bars) and emits completed higher-timeframe bars.
+    Converts raw price updates into completed OHLCV bars.
+
+    Anti-look-ahead: bars are only emitted when superseded by a newer period.
     """
 
     def __init__(
@@ -80,79 +155,144 @@ class BarAssembler:
     ) -> None:
         self.symbol = symbol.upper()
         self.timeframes = timeframes or list(DEFAULT_TIMEFRAMES)
-        self.on_bar_complete = on_bar_complete
-
-        self._periods: dict[str, int] = {}
-        for tf in self.timeframes:
-            self._periods[tf] = timeframe_to_seconds(tf)
-
-        self._active: dict[str, Optional[_Bucket]] = {tf: None for tf in self.timeframes}
+        self._on_complete = on_bar_complete
+        self._open_bars: dict[str, OpenBar] = {}
         self._history: dict[str, list[OHLCV]] = defaultdict(list)
 
-    async def on_candle(self, bar: OHLCV) -> None:
-        """Feed one candle; may emit zero or more completed aggregated bars."""
+        logger.debug(
+            "BarAssembler[%s]: candle_timeframes=%s tick_timeframes=%s",
+            self.symbol,
+            self.timeframes,
+            INTRADAY_TIMEFRAMES,
+        )
+
+    async def on_tick(
+        self,
+        price: float,
+        volume: float = 0.0,
+        timestamp: Optional[datetime] = None,
+    ) -> list[OHLCV]:
+        """
+        Process one tick into every intraday timeframe (< 1 day).
+        Returns completed bars emitted this tick (may be empty).
+        """
+        ts = _utc(timestamp or datetime.now(tz=timezone.utc))
+        completed: list[OHLCV] = []
+
+        for tf in INTRADAY_TIMEFRAMES:
+            tf_minutes = TF_MINUTES[tf]
+            bar_open_time = _floor_timestamp(ts, tf_minutes)
+            finished = await self._apply_price(
+                tf, tf_minutes, bar_open_time, price, volume, from_candle=False
+            )
+            if finished:
+                completed.append(finished)
+
+        return completed
+
+    async def on_candle(self, bar: OHLCV) -> list[OHLCV]:
+        """Accept a completed 1m candle; aggregate into configured higher TFs."""
         if bar.symbol.upper() != self.symbol:
             bar = bar.model_copy(update={"symbol": self.symbol})
 
-        # If incoming bar is already a higher TF, route directly when listed
-        if bar.timeframe in self._periods and bar.timeframe != "1m":
-            completed = bar
-            await self._emit(completed)
-            return
+        completed: list[OHLCV] = []
 
-        # Always process as 1m source for aggregation
-        source = bar.model_copy(update={"timeframe": "1m"})
-        self._append_history("1m", source)
-
-        for tf, period in self._periods.items():
+        for tf in self.timeframes:
             if tf == "1m":
-                await self._emit(source)
+                bar_1m = bar.model_copy(update={"timeframe": "1m"})
+                await self._emit(bar_1m)
+                completed.append(bar_1m)
                 continue
 
-            bucket_start = _bucket_start(source.timestamp, period)
-            active = self._active.get(tf)
-
-            if active is None:
-                b = _Bucket(source)
-                b.start = bucket_start
-                self._active[tf] = b
+            tf_minutes = TF_MINUTES.get(tf)
+            if not tf_minutes or tf_minutes >= _ONE_DAY_MINUTES:
                 continue
 
-            if bucket_start == active.start:
-                active.update(source)
-                continue
+            bar_open_time = _floor_timestamp(bar.timestamp, tf_minutes)
+            finished = await self._apply_price(
+                tf,
+                tf_minutes,
+                bar_open_time,
+                bar.open,
+                bar.volume,
+                from_candle=True,
+                candle=bar,
+            )
+            if finished:
+                completed.append(finished)
 
-            # Bucket closed — emit and start new
-            completed = active.to_ohlcv(self.symbol, tf)
-            self._append_history(tf, completed)
-            await self._emit(completed)
-            nb = _Bucket(source)
-            nb.start = bucket_start
-            self._active[tf] = nb
+        return completed
 
-    async def flush(self) -> None:
-        """Emit any open buckets (end of stream / shutdown)."""
-        for tf, active in list(self._active.items()):
-            if active is None:
-                continue
-            completed = active.to_ohlcv(self.symbol, tf)
-            self._append_history(tf, completed)
-            await self._emit(completed)
-            self._active[tf] = None
+    async def _apply_price(
+        self,
+        tf: str,
+        tf_minutes: int,
+        bar_open_time: datetime,
+        price: float,
+        volume: float,
+        *,
+        from_candle: bool,
+        candle: Optional[OHLCV] = None,
+    ) -> Optional[OHLCV]:
+        open_bar = self._open_bars.get(tf)
 
-    def get_history(self, timeframe: str, max_bars: int = 500) -> list[OHLCV]:
-        hist = self._history.get(timeframe, [])
-        return hist[-max_bars:]
+        if open_bar is None:
+            ob = OpenBar(self.symbol, tf, bar_open_time, tf_minutes, price, volume)
+            if from_candle and candle:
+                ob.high = candle.high
+                ob.low = candle.low
+                ob.close = candle.close
+            self._open_bars[tf] = ob
+            return None
 
-    def _append_history(self, timeframe: str, bar: OHLCV) -> None:
-        hist = self._history[timeframe]
-        hist.append(bar)
-        if len(hist) > 600:
-            self._history[timeframe] = hist[-500:]
+        if bar_open_time > open_bar.open_time:
+            finished = open_bar.to_ohlcv()
+            await self._emit(finished)
+
+            nb = OpenBar(self.symbol, tf, bar_open_time, tf_minutes, price, volume)
+            if from_candle and candle:
+                nb.high = candle.high
+                nb.low = candle.low
+                nb.close = candle.close
+            self._open_bars[tf] = nb
+            return finished
+
+        if from_candle and candle:
+            open_bar.update_from_candle(candle)
+        else:
+            open_bar.update(price, volume)
+        return None
 
     async def _emit(self, bar: OHLCV) -> None:
-        if self.on_bar_complete:
-            await self.on_bar_complete(bar)
+        hist = self._history[bar.timeframe]
+        hist.append(bar)
+        if len(hist) > 600:
+            self._history[bar.timeframe] = hist[-500:]
+
+        if self._on_complete:
+            if asyncio.iscoroutinefunction(self._on_complete):
+                await self._on_complete(bar)
+            else:
+                self._on_complete(bar)
+
+    async def flush(self) -> list[OHLCV]:
+        """Force-emit all open bars (end of replay / shutdown)."""
+        flushed: list[OHLCV] = []
+        for open_bar in list(self._open_bars.values()):
+            if open_bar.tick_count > 0:
+                bar = open_bar.to_ohlcv()
+                await self._emit(bar)
+                flushed.append(bar)
+        self._open_bars.clear()
+        return flushed
+
+    def current_bar(self, timeframe: str) -> Optional[OHLCV]:
+        """Open bar peek — dashboard only; never feed to pipeline."""
+        ob = self._open_bars.get(timeframe)
+        return ob.to_ohlcv() if ob else None
+
+    def get_history(self, timeframe: str, max_bars: int = 500) -> list[OHLCV]:
+        return self._history.get(timeframe, [])[-max_bars:]
 
 
 class MultiSymbolAssembler:
@@ -164,14 +304,20 @@ class MultiSymbolAssembler:
         timeframes: list[str] | None = None,
         on_bar_complete: Optional[OnBarComplete] = None,
     ) -> None:
+        tfs = timeframes or list(DEFAULT_TIMEFRAMES)
         self._assemblers: dict[str, BarAssembler] = {
-            sym.upper(): BarAssembler(sym, timeframes, on_bar_complete)
+            sym.upper(): BarAssembler(sym, tfs, on_bar_complete)
             for sym in symbols
         }
 
     def get(self, symbol: str) -> Optional[BarAssembler]:
         return self._assemblers.get(symbol.upper())
 
-    async def flush_all(self) -> None:
-        for asm in self._assemblers.values():
-            await asm.flush()
+    def symbols(self) -> list[str]:
+        return list(self._assemblers.keys())
+
+    async def flush_all(self) -> dict[str, list[OHLCV]]:
+        result: dict[str, list[OHLCV]] = {}
+        for sym, asm in self._assemblers.items():
+            result[sym] = await asm.flush()
+        return result
