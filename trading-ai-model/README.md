@@ -9,21 +9,34 @@ Monorepo for the multi-agent futures trading system.
 
 ## Quick Start
 
-### Backend
+### One command — API + dashboard (recommended)
 
 ```bash
 cd backend
 python3.13 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
-pytest
-uvicorn api.main:app --reload
+cp ../../.env.example .env   # or copy BACKEND section into backend/.env
+
+cd ../frontend && npm install && cd ../backend
+
+python main.py --mode dev
 ```
 
-API runs at http://127.0.0.1:8000
+- **API:** http://127.0.0.1:8000  
+- **Dashboard:** http://localhost:5173 (Vite proxies `/api` → backend)
 
-### Frontend
+From the monorepo root you can also run: `npm run dev` (after `npm run install:frontend`).
+
+### Backend only
+
+```bash
+cd backend
+source .venv/bin/activate
+python main.py --mode api
+```
+
+### Frontend only
 
 ```bash
 cd frontend
@@ -31,7 +44,7 @@ npm install
 npm run dev
 ```
 
-UI runs at http://localhost:5173 (proxies `/api` → backend on port 8000).
+Requires the API on port 8000 or you will see Vite proxy `ECONNREFUSED` errors.
 
 ### Database
 

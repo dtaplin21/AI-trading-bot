@@ -34,3 +34,12 @@ class MethodEdgeRegistry:
 
     def revoke(self, method_name: str) -> None:
         self._approved.discard(self.normalize_name(method_name))
+
+    def print_status_table(self) -> str:
+        """Human-readable approved-method list for research CLI."""
+        lines = ["Method isolation — approved for confluence voting:", ""]
+        for name in sorted(self._approved):
+            lines.append(f"  ✓  {name}")
+        lines.append("")
+        lines.append(f"Total approved: {len(self._approved)}")
+        return "\n".join(lines)

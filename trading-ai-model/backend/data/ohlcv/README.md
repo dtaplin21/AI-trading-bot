@@ -1,0 +1,30 @@
+# OHLCV Data Directory
+
+Place your candle data files here in this format:
+
+  `{SYMBOL}_1m.csv`   or   `{SYMBOL}_1m.jsonl`
+
+CSV format (headers required):
+
+```
+timestamp,open,high,low,close,volume
+2025-01-06T14:30:00Z,5410.25,5418.50,5408.00,5415.75,1240
+```
+
+JSONL format (one JSON object per line):
+
+```json
+{"timestamp":"2025-01-06T14:30:00Z","open":5410.25,"high":5418.50,"low":5408.00,"close":5415.75,"volume":1240}
+```
+
+Accepted timestamp formats:
+
+- ISO 8601: `2025-01-06T14:30:00Z`
+- Unix epoch: `1736173800`
+
+Symbols: MES, NQ, CL, GC, ZB, RTY  
+(add any symbol matching `WATCHER_SYMBOLS` in `.env`)
+
+If no file is found, the system generates 500 synthetic bars for development/testing only.
+
+Default path: `data/ohlcv` (override with `WATCHER_DATA_PATH` in `.env`).
