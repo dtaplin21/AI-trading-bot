@@ -10,10 +10,13 @@ from chart_watcher.bar_assembler import (
 )
 from chart_watcher.chart_watch_runner import ChartWatchRunner
 from chart_watcher.session_scheduler import (
-    CRYPTO_SYMBOLS,
     CME_ALL,
-    EQUITY_CASH,
-    FOREX_SYMBOLS,
+    CME_ENERGY,
+    CME_EQUITY_INDEX,
+    CME_FX,
+    CME_METALS,
+    CME_TREASURIES,
+    CRYPTO_SYMBOLS,
     SessionScheduler,
     WatcherMode,
 )
@@ -25,10 +28,13 @@ __all__ = [
     "INTRADAY_TIMEFRAMES",
     "MultiSymbolAssembler",
     "TF_MINUTES",
-    "CRYPTO_SYMBOLS",
     "CME_ALL",
-    "EQUITY_CASH",
-    "FOREX_SYMBOLS",
+    "CME_ENERGY",
+    "CME_EQUITY_INDEX",
+    "CME_FX",
+    "CME_METALS",
+    "CME_TREASURIES",
+    "CRYPTO_SYMBOLS",
     "SessionScheduler",
     "WatcherMode",
     "timeframe_to_seconds",

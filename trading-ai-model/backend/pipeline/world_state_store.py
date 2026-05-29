@@ -23,11 +23,16 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, Protocol, runtime_checkable
 
 from pipeline.confluence_report import ConfluenceReport
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class WorldStateDbWriter(Protocol):
+    async def save_snapshot(self, row: dict) -> None: ...
 
 
 class WorldStateSnapshot:
@@ -144,6 +149,13 @@ class WorldStateSnapshot:
         }
 
 
+def _brier_term(snap: WorldStateSnapshot) -> float:
+    label = snap.outcome_label
+    if label is None:
+        return 0.0
+    return (snap.predicted_p_success - label) ** 2
+
+
 class WorldStateStore:
     """
     In-memory store for confluence snapshots and their outcomes.
@@ -155,9 +167,9 @@ class WorldStateStore:
     The result is a growing, labeled training dataset.
     """
 
-    def __init__(self, db_writer=None) -> None:
+    def __init__(self, db_writer: WorldStateDbWriter | None = None) -> None:
         self._snapshots: dict[str, WorldStateSnapshot] = {}
-        self._db = db_writer
+        self._db: WorldStateDbWriter | None = db_writer
         self._method_correct: defaultdict[str, int] = defaultdict(int)
         self._method_incorrect: defaultdict[str, int] = defaultdict(int)
         logger.info("WorldStateStore initialized")
@@ -223,13 +235,16 @@ class WorldStateStore:
         return snap
 
     def _persist_row(self, row: dict) -> None:
+        db = self._db
+        if db is None:
+            return
         try:
             import asyncio
 
             loop = asyncio.get_running_loop()
-            loop.create_task(self._db.save_snapshot(row))
+            loop.create_task(db.save_snapshot(row))
         except RuntimeError:
-            save_sync = getattr(self._db, "save_snapshot_sync", None)
+            save_sync = getattr(db, "save_snapshot_sync", None)
             if callable(save_sync):
                 save_sync(row)
             else:
@@ -351,9 +366,7 @@ class WorldStateStore:
         closed_snaps = [s for s in self._snapshots.values() if s.outcome_label is not None]
         brier = 0.0
         if closed_snaps:
-            brier = sum(
-                (s.predicted_p_success - s.outcome_label) ** 2 for s in closed_snaps
-            ) / len(closed_snaps)
+            brier = sum(_brier_term(s) for s in closed_snaps) / len(closed_snaps)
 
         return {
             "total_snapshots": total,

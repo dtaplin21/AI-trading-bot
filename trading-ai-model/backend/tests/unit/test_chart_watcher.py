@@ -135,30 +135,30 @@ async def test_multi_symbol_assembler_isolated():
 
 
 def test_session_scheduler_crypto_always_open():
-    sched = SessionScheduler()
+    sched = SessionScheduler(mode=WatcherMode.LIVE)
     assert sched.is_trading("BTC") is True
-    assert sched.is_trading("BTC-USD") is True
+    assert sched.is_trading("BTCUSD") is True
     assert sched.seconds_until_open("BTC") == 0.0
 
 
 def test_session_scheduler_replay_always_on():
     sched = SessionScheduler(mode=WatcherMode.REPLAY)
     assert sched.is_trading("MES") is True
-    assert sched.is_trading("SPY") is True
+    assert sched.watcher_mode == WatcherMode.REPLAY
 
 
-def test_session_scheduler_equity_weekend_closed():
+def test_session_scheduler_cme_saturday_closed():
     sched = SessionScheduler(mode=WatcherMode.LIVE)
     saturday = datetime(2025, 1, 11, 12, 0, tzinfo=timezone.utc).astimezone(
         ZoneInfo("America/New_York")
     )
-    assert sched.is_trading("SPY", at=saturday) is False
+    assert sched.is_trading("MES", at=saturday) is False
 
 
-def test_session_scheduler_forex_saturday_closed():
+def test_session_scheduler_cme_maintenance_break_closed():
     sched = SessionScheduler(mode=WatcherMode.LIVE)
-    saturday = datetime(2025, 1, 11, 12, 0, tzinfo=timezone.utc)
-    assert sched.is_trading("EUR/USD", at=saturday) is False
+    wed_break = datetime(2025, 1, 8, 22, 30, tzinfo=timezone.utc)  # 5:30pm ET Wed
+    assert sched.is_trading("CL", at=wed_break) is False
 
 
 def test_session_scheduler_cme_friday_evening_closed():

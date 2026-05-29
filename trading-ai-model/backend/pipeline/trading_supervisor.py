@@ -19,8 +19,9 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, cast
 
+import numpy as np
 import pandas as pd
 
 from agents.chart_reading_agent import ChartReadingAgent
@@ -34,7 +35,11 @@ from paper_trading.paper_trader import get_paper_trader
 from pipeline.confluence_adapter import prepare_confluence_inputs
 from pipeline.confluence_agent import ConfluenceAgent
 from pipeline.confluence_report import ConfluenceReport
-from pipeline.feature_fusion_news_patch import FeatureFusionAgent, fetch_news_features
+from pipeline.feature_fusion_news_patch import (
+    FeatureFusionAgent,
+    NewsAgentProtocol,
+    fetch_news_features,
+)
 from pipeline.probability_gate import ProbabilityGate
 from pipeline.schemas import (
     AuditReport,
@@ -90,10 +95,10 @@ class TradingPipelineSupervisor:
             account_size=float(os.getenv("ACCOUNT_SIZE", "10000"))
         )
         if news_agent is _UNSET:
-            self._news = get_news_agent()
+            self._news: NewsAgentProtocol | None = get_news_agent()
             bootstrap_news_sync()
         else:
-            self._news = news_agent
+            self._news = cast(NewsAgentProtocol | None, news_agent)
 
         self._chart = ChartReadingAgent()
         self._confluence = ConfluenceAgent(method_registry=self._registry)
@@ -155,8 +160,9 @@ class TradingPipelineSupervisor:
             result.confluence = self._confluence.analyze(**confluence_inputs)
 
             ctx.confluence = result.confluence
-            result.fused = self._fusion.build_from_context(ctx)
-            result.fused.signal_rank = self._compute_signal_rank(result.fused, result.confluence)
+            fused = self._fusion.build_from_context(ctx)
+            result.fused = fused
+            fused.signal_rank = self._compute_signal_rank(fused, result.confluence)
 
             if not result.confluence.ready_for_prediction:
                 result.audit = self._build_audit(result)
@@ -164,15 +170,16 @@ class TradingPipelineSupervisor:
 
             hist_p, hist_n = self._world.compute_historical_p_success(result.confluence)
             if hist_n <= 0:
-                hist_n = int(result.fused.sample_size or ctx.historical_sample_size or 0)
+                hist_n = int(fused.sample_size or ctx.historical_sample_size or 0)
 
-            result.prediction = await self._run_prediction(result.fused, hist_p, hist_n)
+            prediction = await self._run_prediction(fused, hist_p, hist_n)
+            result.prediction = prediction
 
             gate = self._gate.check(
-                result.prediction.trade_start_probability,
-                result.prediction.expected_value,
+                prediction.trade_start_probability,
+                prediction.expected_value,
                 hist_n,
-                result.fused.signal_rank,
+                fused.signal_rank,
                 f"{self.symbol} {self.timeframe}",
             )
             if not gate.passed:
@@ -182,9 +189,9 @@ class TradingPipelineSupervisor:
             self._world.store_snapshot(
                 snapshot_id=result.snapshot_id,
                 confluence=result.confluence,
-                signal_rank=result.fused.signal_rank,
-                predicted_p=result.prediction.trade_start_probability,
-                predicted_ev=result.prediction.expected_value,
+                signal_rank=fused.signal_rank,
+                predicted_p=prediction.trade_start_probability,
+                predicted_ev=prediction.expected_value,
             )
 
             direction = (
@@ -201,9 +208,9 @@ class TradingPipelineSupervisor:
                     timeframe=self.timeframe,
                     direction=direction,
                     timestamp_scored=datetime.now(tz=timezone.utc),
-                    p_success=result.prediction.trade_start_probability,
-                    ev_dollars=result.prediction.expected_value,
-                    signal_rank=result.fused.signal_rank,
+                    p_success=prediction.trade_start_probability,
+                    ev_dollars=prediction.expected_value,
+                    signal_rank=fused.signal_rank,
                     sample_size=hist_n,
                     methods_agreed=(
                         result.confluence.strongest_cluster.methods
@@ -225,22 +232,22 @@ class TradingPipelineSupervisor:
 
             result.plan = self._planner.plan(
                 confluence=result.confluence,
-                p_success=result.prediction.trade_start_probability,
-                ev_dollars=result.prediction.expected_value,
+                p_success=prediction.trade_start_probability,
+                ev_dollars=prediction.expected_value,
                 sample_size=hist_n,
-                signal_rank=result.fused.signal_rank,
-                p_target=result.prediction.target_hit_probability,
-                p_stop=result.prediction.continuation_probability,
+                signal_rank=fused.signal_rank,
+                p_target=prediction.target_hit_probability,
+                p_stop=prediction.continuation_probability,
             )
 
             result.risk = self._risk_eng.approve(
                 plan=result.plan,
-                fused=result.fused,
+                fused=fused,
                 confluence=result.confluence,
-                p_success=result.prediction.trade_start_probability,
-                ev_dollars=result.prediction.expected_value,
+                p_success=prediction.trade_start_probability,
+                ev_dollars=prediction.expected_value,
                 sample_size=hist_n,
-                signal_rank=result.fused.signal_rank,
+                signal_rank=fused.signal_rank,
             )
 
             if result.risk.approved and should_execute:
@@ -317,8 +324,6 @@ class TradingPipelineSupervisor:
         try:
             import pickle
             from pathlib import Path
-
-            import numpy as np
 
             mp = os.getenv("LIGHTGBM_MODEL_PATH", "ml/models/lightgbm_production.pkl")
             if Path(mp).exists():

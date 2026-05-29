@@ -12,7 +12,7 @@ from typing import Optional, Protocol
 
 from agents.news.news_schemas import NewsFeatures
 from agents.pipeline_context import PipelineContext
-from pipeline.schemas import NewsIntelligenceBlock
+from pipeline.schemas import FusedFeatureSet, NewsIntelligenceBlock
 
 logger = logging.getLogger(__name__)
 
@@ -133,14 +133,12 @@ class FeatureFusionAgent:
 
         self._inner = AgentFusion(news_agent=news_agent)
 
-    def build_from_context(self, ctx: PipelineContext) -> "FusedFeatureSet":
-        from pipeline.schemas import FusedFeatureSet
-
+    def build_from_context(self, ctx: PipelineContext) -> FusedFeatureSet:
         self._inner.run(ctx)
         if ctx.fused is None:
             raise ValueError("Feature fusion produced no fused features")
         return FusedFeatureSet.from_fused_features(ctx.fused)
 
-    def build(self, ctx: PipelineContext, **kwargs) -> "FusedFeatureSet":
+    def build(self, ctx: PipelineContext, **kwargs) -> FusedFeatureSet:
         """Alias — kwargs ignored; ctx must include method outputs and confluence."""
         return self.build_from_context(ctx)

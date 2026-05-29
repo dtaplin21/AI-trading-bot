@@ -79,3 +79,9 @@ target-version = "py311"
 [tool.mypy]
 python_version = "3.11"
 ignore_missing_imports = true
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.13"
+extraPaths = ["."]
