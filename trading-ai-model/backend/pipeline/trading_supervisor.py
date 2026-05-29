@@ -136,7 +136,7 @@ class TradingPipelineSupervisor:
 
             ctx = PipelineContext(
                 symbol=self.symbol,
-                timeframe=self.timeframe,
+                timeframe=bar.timeframe or self.timeframe,
                 ohlcv=merged,
                 timestamp=bar.timestamp if bar.timestamp.tzinfo else bar.timestamp.replace(tzinfo=timezone.utc),
                 portfolio=portfolio or PortfolioState(),

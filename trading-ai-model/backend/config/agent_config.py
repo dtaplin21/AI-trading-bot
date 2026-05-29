@@ -47,6 +47,10 @@ METHOD_NAME_ALIASES: dict[str, str] = {
     "markov_state": "markov",
 }
 
+# Default symbols/timeframes for ChartWatchRunner (override via WATCHER_* env)
+WATCHED_SYMBOLS: list[str] = ["MES", "ES", "NQ", "MNQ", "CL", "GC", "ZB", "RTY"]
+WATCHED_TIMEFRAMES: list[str] = ["1m", "5m", "15m", "1h"]
+
 MCTS_CONFIG: dict[str, float | int] = {
     "min_rollouts": 500,
     "exploration_constant": 1.414,
