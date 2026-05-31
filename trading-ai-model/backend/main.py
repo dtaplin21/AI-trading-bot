@@ -2,8 +2,8 @@
 main.py — updated entry point
 
 Modes:
-  python main.py --mode dev      ← FastAPI + Vite dashboard (recommended for UI)
-  python main.py --mode watch    ← 24/7 chart watcher
+  python main.py --mode dev      ← FastAPI + Vite + chart watcher (npm run dev)
+  python main.py --mode watch    ← chart watcher only
   python main.py --mode api      ← FastAPI server only
   python main.py --mode replay   ← historical backtest
   python main.py --mode research ← method isolation testing
@@ -107,7 +107,7 @@ async def start_research() -> None:
 
 
 def start_dev() -> None:
-    """Run FastAPI (port 8000) and Vite (port 5173) together for local dashboard dev."""
+    """Run FastAPI, Vite, and optionally the chart watcher for local dev."""
     if not (_FRONTEND_ROOT / "package.json").exists():
         print(f"Frontend not found at {_FRONTEND_ROOT}", file=sys.stderr)
         sys.exit(1)
@@ -117,13 +117,14 @@ def start_dev() -> None:
         sys.exit(1)
 
     api_port = os.getenv("API_PORT", "8000")
-    procs: list[subprocess.Popen] = []
+    start_watcher_proc = os.getenv("DEV_START_WATCHER", "true").lower() == "true"
+    procs: dict[str, subprocess.Popen] = {}
 
     def terminate_all() -> None:
-        for proc in procs:
+        for proc in procs.values():
             if proc.poll() is None:
                 proc.terminate()
-        for proc in procs:
+        for proc in procs.values():
             try:
                 proc.wait(timeout=8)
             except subprocess.TimeoutExpired:
@@ -136,38 +137,59 @@ def start_dev() -> None:
     signal.signal(signal.SIGINT, on_signal)
     signal.signal(signal.SIGTERM, on_signal)
 
-    vite = subprocess.Popen(
+    procs["vite"] = subprocess.Popen(
         ["npm", "run", "dev"],
         cwd=str(_FRONTEND_ROOT),
     )
-    procs.append(vite)
 
     # Brief pause so Vite binds before the UI's first poll
     time.sleep(1.5)
 
-    api = subprocess.Popen(
+    procs["api"] = subprocess.Popen(
         [sys.executable, str(_BACKEND_ROOT / "main.py"), "--mode", "api"],
         cwd=str(_BACKEND_ROOT),
     )
-    procs.append(api)
+
+    if start_watcher_proc:
+        procs["watcher"] = subprocess.Popen(
+            [sys.executable, str(_BACKEND_ROOT / "main.py"), "--mode", "watch"],
+            cwd=str(_BACKEND_ROOT),
+        )
+
+    watcher_mode = os.getenv("WATCHER_MODE", "paper").upper()
+    watcher_symbols = os.getenv("WATCHER_SYMBOLS", "MES,NQ")
 
     print(f"\n{'=' * 55}")
-    print("  Trading AI — Dev (API + Dashboard)")
+    print("  Trading AI — Dev Stack")
     print(f"  API:       http://127.0.0.1:{api_port}")
     print(f"  Dashboard: http://localhost:5173")
     print(f"  Docs:      http://127.0.0.1:{api_port}/docs")
+    if start_watcher_proc:
+        print(f"  Watcher:   {watcher_mode} | {watcher_symbols}")
+    else:
+        print("  Watcher:   disabled (DEV_START_WATCHER=false)")
     print(f"{'=' * 55}\n")
-    print("  Press Ctrl+C to stop both servers.\n")
+    print("  Press Ctrl+C to stop all processes.\n")
 
     try:
         while True:
-            for proc in procs:
+            for name, proc in list(procs.items()):
                 code = proc.poll()
-                if code is not None:
-                    name = "vite" if proc is vite else "api"
-                    print(f"\n{name} exited with code {code}. Shutting down dev stack.")
-                    terminate_all()
-                    sys.exit(code if code != 0 else 0)
+                if code is None:
+                    continue
+                if name == "watcher":
+                    if code == 0:
+                        print(
+                            "\nWatcher finished (paper/replay complete). "
+                            "API and dashboard still running."
+                        )
+                    else:
+                        print(f"\nWatcher exited with code {code}. API and dashboard still running.")
+                    del procs["watcher"]
+                    continue
+                print(f"\n{name} exited with code {code}. Shutting down dev stack.")
+                terminate_all()
+                sys.exit(code if code != 0 else 0)
             time.sleep(0.5)
     except KeyboardInterrupt:
         terminate_all()

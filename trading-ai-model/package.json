@@ -2,7 +2,7 @@
   "name": "trading-ai-model",
   "private": true,
   "version": "0.1.0",
-  "description": "Trading AI monorepo — run dev stack from repo root",
+  "description": "Trading AI monorepo — API + dashboard + chart watcher",
   "scripts": {
     "dev": "cd backend && python main.py --mode dev",
     "dev:api": "cd backend && python main.py --mode api",
