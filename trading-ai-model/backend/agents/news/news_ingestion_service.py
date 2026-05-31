@@ -18,9 +18,10 @@ import asyncio
 import logging
 import os
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
-from typing import Optional
+from functools import partial
+from typing import Awaitable, Callable, Optional
 
 import httpx
 
@@ -64,54 +65,85 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _source_requires_key(source_id: str) -> bool:
+    key_map = {
+        "finnhub_news": FINNHUB_KEY,
+        "finnhub_calendar": FINNHUB_KEY,
+        "benzinga": BENZINGA_KEY,
+        "polygon": POLYGON_KEY,
+        "fmp_news": FMP_KEY,
+        "fmp_calendar": FMP_KEY,
+        "newsapi": NEWSAPI_KEY,
+        "marketaux": MARKETAUX_KEY,
+        "alpha_vantage": AV_KEY,
+        "eia_petroleum": os.getenv("EIA_API_KEY", ""),
+        "fred_releases": FRED_KEY,
+    }
+    if source_id not in key_map:
+        return False
+    return not key_map[source_id]
+
+
 class NewsIngestionService:
     """Collects raw news items from all enabled sources concurrently."""
 
     def __init__(self) -> None:
         self._seen: set[str] = set()
         self._client: Optional[httpx.AsyncClient] = None
+        self._source_registry: dict[str, Callable[[], Awaitable[list[RawNewsItem]]]] = {}
 
-    async def __aenter__(self) -> NewsIngestionService:
-        self._client = httpx.AsyncClient(
-            timeout=httpx.Timeout(HTTP_TIMEOUT),
-            follow_redirects=True,
-            headers={"User-Agent": "TradingAI-NewsAgent/1.0"},
-        )
-        return self
+    def _ensure_registry(self) -> None:
+        if self._source_registry:
+            return
+        self._source_registry = {
+            "finnhub_news": self._fetch_finnhub_news,
+            "finnhub_calendar": self._fetch_finnhub_calendar,
+            "benzinga": self._fetch_benzinga,
+            "polygon": self._fetch_polygon,
+            "fmp_news": self._fetch_fmp_news,
+            "fmp_calendar": self._fetch_fmp_calendar,
+            "newsapi": self._fetch_newsapi,
+            "marketaux": self._fetch_marketaux,
+            "alpha_vantage": self._fetch_alpha_vantage,
+            "fred_releases": self._fetch_fred_releases,
+            "eia_petroleum": self._fetch_eia_petroleum,
+        }
+        for name, url in RSS_FEEDS.items():
+            self._source_registry[f"rss_{name}"] = partial(self._fetch_rss, name, url)
 
-    async def __aexit__(self, *_) -> None:
-        if self._client:
-            await self._client.aclose()
+    def list_source_ids(self) -> list[str]:
+        self._ensure_registry()
+        return sorted(self._source_registry.keys())
+
+    async def ingest_sources(self, source_ids: list[str]) -> list[RawNewsItem]:
+        """Fetch only the requested sources (calendar pinpoint polling)."""
+        self._ensure_registry()
+        tasks: list = []
+        for sid in source_ids:
+            if sid not in self._source_registry:
+                logger.warning("NewsIngestion: unknown source_id %s", sid)
+                continue
+            if _source_requires_key(sid):
+                logger.debug("NewsIngestion: skipping %s — API key not set", sid)
+                continue
+            tasks.append(self._source_registry[sid]())
+        if not tasks:
+            return []
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        return self._merge_results(results, allow_dev_fallback=False)
 
     async def ingest_all(self) -> list[RawNewsItem]:
         """Fire all source fetchers concurrently, deduplicate, sort newest first."""
-        tasks: list = []
-
-        if FINNHUB_KEY:
-            tasks.append(self._fetch_finnhub_news())
-            tasks.append(self._fetch_finnhub_calendar())
-        if BENZINGA_KEY:
-            tasks.append(self._fetch_benzinga())
-        if POLYGON_KEY:
-            tasks.append(self._fetch_polygon())
-        if FMP_KEY:
-            tasks.append(self._fetch_fmp_news())
-            tasks.append(self._fetch_fmp_calendar())
-        if NEWSAPI_KEY:
-            tasks.append(self._fetch_newsapi())
-        if MARKETAUX_KEY:
-            tasks.append(self._fetch_marketaux())
-        if AV_KEY:
-            tasks.append(self._fetch_alpha_vantage())
-
-        tasks.append(self._fetch_fred_releases())
-        tasks.append(self._fetch_eia_petroleum())
-
-        for name, url in RSS_FEEDS.items():
-            tasks.append(self._fetch_rss(name, url))
-
+        self._ensure_registry()
+        tasks = [
+            fn()
+            for sid, fn in self._source_registry.items()
+            if not _source_requires_key(sid)
+        ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        return self._merge_results(results, allow_dev_fallback=True)
 
+    def _merge_results(self, results: list, *, allow_dev_fallback: bool) -> list[RawNewsItem]:
         items: list[RawNewsItem] = []
         for batch in results:
             if isinstance(batch, Exception):
@@ -125,12 +157,24 @@ class NewsIngestionService:
                     self._seen.add(key)
                     items.append(item)
 
-        if not items and os.getenv("APP_ENV", "development") == "development":
+        if allow_dev_fallback and not items and os.getenv("APP_ENV", "development") == "development":
             items = self._dev_fallback_items()
 
         items.sort(key=lambda x: x.published_at, reverse=True)
         logger.info("NewsIngestion: collected %d unique items", len(items))
         return items
+
+    async def __aenter__(self) -> NewsIngestionService:
+        self._client = httpx.AsyncClient(
+            timeout=httpx.Timeout(HTTP_TIMEOUT),
+            follow_redirects=True,
+            headers={"User-Agent": "TradingAI-NewsAgent/1.0"},
+        )
+        return self
+
+    async def __aexit__(self, *_) -> None:
+        if self._client:
+            await self._client.aclose()
 
     def _dedup_key(self, item: RawNewsItem) -> str:
         return f"{item.source.value}|{item.headline[:80]}|{item.published_at.date()}"
@@ -432,9 +476,9 @@ class NewsIngestionService:
         params = {
             "api_key": FRED_KEY or "abcdefghijklmnopqrstuvwxyz123456",
             "file_type": "json",
-            "include_release_dates_with_no_data": "false",
+            "include_release_dates_with_no_data": "true" if FRED_KEY else "false",
             "realtime_start": _utc_now().strftime("%Y-%m-%d"),
-            "realtime_end": _utc_now().strftime("%Y-%m-%d"),
+            "realtime_end": (_utc_now() + timedelta(days=1)).strftime("%Y-%m-%d"),
         }
         try:
             r = await self._get(url, params)

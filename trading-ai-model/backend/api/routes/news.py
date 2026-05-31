@@ -33,6 +33,24 @@ def recent_events(symbol: str | None = None, hours: int = 24):
     return {"events": [e.model_dump() for e in events]}
 
 
+@router.get("/calendar/schedule")
+def calendar_schedule_status():
+    agent = get_news_agent()
+    return {
+        "status": agent.get_status().get("calendar_scheduler"),
+        "upcoming": [e.model_dump() for e in agent.get_upcoming_events(hours=168)],
+    }
+
+
+@router.post("/calendar/sync")
+async def sync_calendar():
+    from agents.news.calendar.calendar_sync import CalendarSyncService
+
+    svc = CalendarSyncService()
+    result = await svc.sync(get_news_agent()._calendar)
+    return result
+
+
 @router.get("/calendar")
 def upcoming_calendar(hours: int = 24):
     events = get_news_agent().get_upcoming_events(hours)

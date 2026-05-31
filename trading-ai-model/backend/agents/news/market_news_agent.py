@@ -1,8 +1,5 @@
-"""
-agents/news/market_news_agent.py
+"""MarketNewsAgent — orchestrates news ingestion, calendar scheduling, and classification."""
 
-The Market News Intelligence Agent — supervisor for the news pipeline.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -11,6 +8,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from agents.news.calendar.calendar_scheduler import NewsCalendarScheduler
 from agents.news.economic_calendar_service import EconomicCalendarService
 from agents.news.news_db_store import NewsDbStore
 from agents.news.news_ingestion_service import NewsIngestionService
@@ -29,7 +27,6 @@ from config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
-POLLING_INTERVAL_SECONDS = 60
 MAX_CACHE_HOURS = 6
 MAX_EVENTS_CACHE = 500
 
@@ -63,56 +60,67 @@ class MarketNewsAgent:
         self._last_run: Optional[datetime] = None
         self._error_count = 0
         self._task: Optional[asyncio.Task] = None
+        settings = get_settings()
+        offsets = [int(x.strip()) for x in settings.news_calendar_trigger_offsets.split(",") if x.strip()]
+        from agents.news.calendar.calendar_store import CalendarScheduleStore
+        from agents.news.calendar.calendar_sync import CalendarSyncService
+
+        store = CalendarScheduleStore()
+        sync = CalendarSyncService(
+            store=store,
+            days_ahead=settings.news_calendar_days_ahead,
+            trigger_offsets_minutes=offsets or [-15, 0, 5],
+        )
+        self._scheduler = NewsCalendarScheduler(
+            self,
+            baseline_interval_seconds=self._polling_interval,
+            max_triggers_per_day=settings.news_calendar_max_triggers_per_day,
+            catchup_minutes=settings.news_calendar_catchup_minutes,
+            sync_interval_seconds=settings.news_calendar_sync_interval_seconds,
+            store=store,
+            sync_service=sync,
+        )
 
         logger.info(
-            "MarketNewsAgent initialized | polling=%ds | llm=%s",
+            "MarketNewsAgent initialized | baseline=%ds | calendar_triggers/day=%d",
             self._polling_interval,
-            use_llm,
+            settings.news_calendar_max_triggers_per_day,
         )
 
     async def start(self) -> None:
+        """Legacy loop — prefer scheduler via start_background()."""
         self._running = True
-        logger.info("MarketNewsAgent: starting polling loop")
-        while self._running:
-            try:
-                await self._run_cycle()
-                self._error_count = 0
-            except Exception as e:
-                self._error_count += 1
-                logger.error("MarketNewsAgent cycle error #%d: %s", self._error_count, e)
-                if self._error_count >= 5:
-                    logger.critical("MarketNewsAgent: too many consecutive errors, stopping")
-                    self._running = False
-                    break
-            await asyncio.sleep(self._polling_interval)
+        await self._scheduler.run()
 
     def start_background(self) -> None:
-        """Schedule polling loop on the running event loop."""
+        """Start calendar-aware scheduler (baseline + event triggers)."""
         if self._task and not self._task.done():
             return
-        self._task = asyncio.create_task(self.start())
+        self._running = True
+        self._scheduler.start_background()
+        self._task = self._scheduler._task
 
     async def stop(self) -> None:
         self._running = False
-        if self._task:
-            self._task.cancel()
+        await self._scheduler.stop()
         logger.info("MarketNewsAgent: stopped")
 
     async def run_once(self) -> list[NewsEvent]:
-        return await self._run_cycle()
-
-    async def _run_cycle(self) -> list[NewsEvent]:
-        logger.debug("MarketNewsAgent: starting cycle at %s", datetime.now(timezone.utc).isoformat())
-
         async with NewsIngestionService() as ingestion:
-            raw_items: list[RawNewsItem] = await ingestion.ingest_all()
+            raw_items = await ingestion.ingest_all()
+        return await self._process_raw_items(raw_items)
 
+    async def run_sources(self, source_ids: list[str]) -> list[NewsEvent]:
+        async with NewsIngestionService() as ingestion:
+            raw_items = await ingestion.ingest_sources(source_ids)
+        return await self._process_raw_items(raw_items)
+
+    async def _process_raw_items(self, raw_items: list[RawNewsItem]) -> list[NewsEvent]:
         if not raw_items:
-            logger.debug("MarketNewsAgent: no new items this cycle")
             self._last_run = datetime.now(timezone.utc)
             return []
 
-        classified: list[NewsEvent] = await self._sentiment.classify_batch(raw_items)
+        classified = await self._sentiment.classify_batch(raw_items)
         new_impacts: list[SymbolNewsImpact] = []
         new_events: list[NewsEvent] = []
 
@@ -137,10 +145,9 @@ class MarketNewsAgent:
         self._last_run = datetime.now(timezone.utc)
 
         logger.info(
-            "MarketNewsAgent: cycle complete | %d new events | cache=%d | breaking=%d",
+            "MarketNewsAgent: processed %d items | cache=%d",
             len(new_events),
             len(self._events),
-            sum(1 for e in new_events if e.news_mode == NewsMode.RISK_EVENT),
         )
         return new_events
 
@@ -208,6 +215,7 @@ class MarketNewsAgent:
         return "\n".join(lines)
 
     def get_status(self) -> dict:
+        sched = self._scheduler.status()
         return {
             "running": self._running,
             "last_run": self._last_run.isoformat() if self._last_run else None,
@@ -215,6 +223,7 @@ class MarketNewsAgent:
             "error_count": self._error_count,
             "polling_interval": self._polling_interval,
             "db_connected": self._db.available,
+            "calendar_scheduler": sched,
         }
 
     def _get_recent_events(

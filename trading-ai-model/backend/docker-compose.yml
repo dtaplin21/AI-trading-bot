@@ -16,6 +16,7 @@ services:
       - ./db/migrations/003_news_intelligence_tables.sql:/docker-entrypoint-initdb.d/03_news.sql
       - ./db/migrations/004_confluence_outcomes.sql:/docker-entrypoint-initdb.d/04_outcomes.sql
       - ./db/migrations/005_planner_audits.sql:/docker-entrypoint-initdb.d/05_planner_audits.sql
+      - ./db/migrations/006_calendar_poll_schedule.sql:/docker-entrypoint-initdb.d/06_calendar_poll_schedule.sql
 
 volumes:
   timescale_data:

@@ -149,6 +149,37 @@ CREATE TABLE IF NOT EXISTS planner_decision_audits (
 );
 """
 
+CALENDAR_SCHEDULE_DDL = """
+CREATE TABLE IF NOT EXISTS calendar_scheduled_events (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    provider_id      TEXT NOT NULL,
+    external_key     TEXT NOT NULL,
+    event_name       TEXT NOT NULL,
+    event_type       TEXT NOT NULL,
+    event_at_utc     TIMESTAMPTZ NOT NULL,
+    impact_level     TEXT NOT NULL,
+    source_ids       TEXT[] NOT NULL,
+    affected_symbols TEXT[],
+    synced_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (provider_id, external_key)
+);
+CREATE TABLE IF NOT EXISTS calendar_poll_triggers (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    event_id         UUID NOT NULL REFERENCES calendar_scheduled_events(id) ON DELETE CASCADE,
+    trigger_at_utc   TIMESTAMPTZ NOT NULL,
+    offset_minutes   INT NOT NULL,
+    source_ids       TEXT[] NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'pending',
+    fired_at         TIMESTAMPTZ,
+    UNIQUE (event_id, offset_minutes)
+);
+CREATE INDEX IF NOT EXISTS idx_calendar_events_at
+    ON calendar_scheduled_events (event_at_utc);
+CREATE INDEX IF NOT EXISTS idx_calendar_triggers_pending
+    ON calendar_poll_triggers (trigger_at_utc)
+    WHERE status = 'pending';
+"""
+
 
 class TimescaleStore:
     """Postgres/TimescaleDB store with graceful fallback when DB unavailable."""
@@ -174,6 +205,7 @@ class TimescaleStore:
                     cur.execute(SYMBOL_IMPACTS_DDL)
                     cur.execute(CONFLUENCE_OUTCOMES_DDL)
                     cur.execute(PLANNER_AUDITS_DDL)
+                    cur.execute(CALENDAR_SCHEDULE_DDL)
                     cur.execute(NEWS_TABLES_DDL)
                     try:
                         cur.execute(NEWS_EVENTS_V2_COLUMNS)
@@ -544,6 +576,156 @@ class TimescaleStore:
                 cur.execute(sql, (limit,))
                 rows = cur.fetchall()
         return [r[0] for r in rows if r and r[0]]
+
+    def upsert_calendar_event(self, draft) -> str:
+        if not self._available:
+            return ""
+        sql = """
+            INSERT INTO calendar_scheduled_events (
+                provider_id, external_key, event_name, event_type,
+                event_at_utc, impact_level, source_ids, affected_symbols
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (provider_id, external_key) DO UPDATE SET
+                event_name = EXCLUDED.event_name,
+                event_type = EXCLUDED.event_type,
+                event_at_utc = EXCLUDED.event_at_utc,
+                impact_level = EXCLUDED.impact_level,
+                source_ids = EXCLUDED.source_ids,
+                affected_symbols = EXCLUDED.affected_symbols,
+                synced_at = NOW()
+            RETURNING id
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql,
+                    (
+                        draft.provider_id,
+                        draft.external_key,
+                        draft.event_name,
+                        draft.event_type.value if hasattr(draft.event_type, "value") else draft.event_type,
+                        draft.event_at_utc,
+                        draft.impact_level.value if hasattr(draft.impact_level, "value") else draft.impact_level,
+                        draft.source_ids,
+                        draft.affected_symbols or None,
+                    ),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return str(row[0]) if row else ""
+
+    def insert_calendar_trigger(
+        self,
+        event_id: str,
+        trigger_at_utc: datetime,
+        offset_minutes: int,
+        source_ids: list[str],
+    ) -> bool:
+        if not self._available:
+            return False
+        sql = """
+            INSERT INTO calendar_poll_triggers (
+                event_id, trigger_at_utc, offset_minutes, source_ids, status
+            ) VALUES (%s,%s,%s,%s,'pending')
+            ON CONFLICT (event_id, offset_minutes) DO NOTHING
+            RETURNING id
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (event_id, trigger_at_utc, offset_minutes, source_ids))
+                created = cur.fetchone() is not None
+            conn.commit()
+        return created
+
+    def fetch_due_calendar_triggers(self, now: datetime, limit: int) -> list:
+        from agents.news.calendar.schemas import CalendarPollTrigger
+
+        if not self._available:
+            return []
+        sql = """
+            SELECT id, event_id, trigger_at_utc, offset_minutes, source_ids, status, fired_at
+            FROM calendar_poll_triggers
+            WHERE status = 'pending' AND trigger_at_utc <= %s
+            ORDER BY trigger_at_utc ASC
+            LIMIT %s
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (now, limit))
+                rows = cur.fetchall()
+        return [self._calendar_trigger_row(r) for r in rows]
+
+    def fetch_catchup_calendar_triggers(self, now: datetime, since: datetime) -> list:
+        if not self._available:
+            return []
+        sql = """
+            SELECT id, event_id, trigger_at_utc, offset_minutes, source_ids, status, fired_at
+            FROM calendar_poll_triggers
+            WHERE status = 'pending' AND trigger_at_utc <= %s AND trigger_at_utc >= %s
+            ORDER BY trigger_at_utc ASC
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (now, since))
+                rows = cur.fetchall()
+        return [self._calendar_trigger_row(r) for r in rows]
+
+    def delete_calendar_trigger(self, trigger_id: str) -> None:
+        if not self._available:
+            return
+        sql = "DELETE FROM calendar_poll_triggers WHERE id = %s"
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (trigger_id,))
+            conn.commit()
+
+    def cleanup_calendar_events(self) -> int:
+        if not self._available:
+            return 0
+        sql = """
+            DELETE FROM calendar_scheduled_events e
+            WHERE e.event_at_utc < NOW() - INTERVAL '1 hour'
+              AND NOT EXISTS (
+                SELECT 1 FROM calendar_poll_triggers t
+                WHERE t.event_id = e.id AND t.status = 'pending'
+              )
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                n = cur.rowcount
+            conn.commit()
+        return n
+
+    def count_calendar_triggers_fired_since(self, since: datetime) -> int:
+        return 0
+
+    def next_calendar_trigger_at(self) -> datetime | None:
+        if not self._available:
+            return None
+        sql = """
+            SELECT MIN(trigger_at_utc) FROM calendar_poll_triggers
+            WHERE status = 'pending' AND trigger_at_utc > NOW()
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                row = cur.fetchone()
+        return row[0] if row and row[0] else None
+
+    @staticmethod
+    def _calendar_trigger_row(row) -> "CalendarPollTrigger":
+        from agents.news.calendar.schemas import CalendarPollTrigger
+
+        return CalendarPollTrigger(
+            id=str(row[0]),
+            event_id=str(row[1]),
+            trigger_at_utc=row[2],
+            offset_minutes=int(row[3]),
+            source_ids=list(row[4] or []),
+            status=row[5],
+            fired_at=row[6],
+        )
 
     def insert_planner_audit(self, record: dict) -> None:
         if not self._available:

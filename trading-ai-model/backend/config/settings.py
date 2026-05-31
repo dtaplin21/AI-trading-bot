@@ -72,8 +72,13 @@ class Settings(BaseSettings):
 
     # News intelligence
     news_enabled: bool = True
-    news_polling_interval_seconds: int = 60
+    news_polling_interval_seconds: int = 14400
     news_load_default_calendar: bool = False
+    news_calendar_sync_interval_seconds: int = 21600
+    news_calendar_catchup_minutes: int = 30
+    news_calendar_max_triggers_per_day: int = 50
+    news_calendar_days_ahead: int = 14
+    news_calendar_trigger_offsets: str = "-15,0,5"
 
     # News API keys (optional — RSS + FRED public demo work without keys)
     finnhub_api_key: str = ""
