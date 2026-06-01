@@ -1,4 +1,4 @@
-"""Safe retraining pipeline — PromotionPolicy + ml.registry.ModelRegistry."""
+"""API/cron facade over ml.training.retrain_pipeline."""
 
 from __future__ import annotations
 
@@ -11,18 +11,25 @@ from agents.learning.model_registry import ModelStage
 from config.settings import get_settings
 from ml.promotion.promotion_policy import PromotionPolicy
 from ml.registry.model_registry import ModelRegistry
-from ml.training.train_lightgbm import train
+from ml.training.retrain_pipeline import RetrainPipeline as UnifiedRetrainPipeline
+from ml.training.retrain_pipeline import RetrainResult
+from pipeline.world_state_runtime import get_world_state_store
 
 logger = logging.getLogger(__name__)
 
 
 class RetrainPipeline:
-    """Observe → Store → Label → Retrain → Validate → Approve → Deploy."""
+    """Scheduled retrain + manual promote/rollback for /models API."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.settings = get_settings()
         self.registry = ModelRegistry()
         self.policy = PromotionPolicy()
+        self._inner = UnifiedRetrainPipeline(
+            get_world_state_store(),
+            self.registry,
+            self.policy,
+        )
         self.state_file = Path(self.settings.model_dir) / "retrain_state.json"
 
     def _load_state(self) -> dict:
@@ -52,69 +59,35 @@ class RetrainPipeline:
                 "next_in_days": self.settings.retrain_schedule_days,
             }
 
-        logger.info("Starting scheduled retrain")
-        result = train()
-        metrics = result.get("metrics", {})
-        prod_brier = float(metrics.get("production_brier", 1.0))
-        holdout_brier = float(metrics.get("holdout_brier", 1.0))
+        result = self._inner.run(force=force, requested_by="scheduled")
+        return self._finalize(result)
 
-        record = self.registry.register_candidate(
-            model_obj={"version": result["version"]},
-            n_samples=int(metrics.get("samples", 0)),
-            holdout_brier=holdout_brier,
-            production_brier_at_train=prod_brier,
-            holdout_auc=float(metrics.get("holdout_auc", 0.0)),
-            positive_rate=float(metrics.get("positive_rate", 0.5)),
-            brier_improvement=prod_brier - holdout_brier,
-            model_id=f"lgbm_{result['model_id']}",
-            lightgbm_txt_path=result["artifact_path"],
-        )
+    def run(self, force: bool = False, requested_by: str = "api") -> dict:
+        """Direct run — same as unified pipeline."""
+        result = self._inner.run(force=force, requested_by=requested_by)
+        return self._finalize(result)
 
-        decision = self.policy.evaluate(
-            model_id=record.model_id,
-            n_samples=record.n_samples,
-            holdout_brier=record.holdout_brier,
-            production_brier=record.production_brier_at_train,
-            holdout_auc=record.holdout_auc,
-            positive_rate=record.positive_rate,
-            walk_forward_brier=metrics.get("walk_forward_brier"),
-        )
+    def _finalize(self, result: RetrainResult) -> dict:
+        if not result.skipped and not result.error:
+            state = self._load_state()
+            state["last_retrain"] = datetime.now(timezone.utc).isoformat()
+            if result.model_id:
+                state["last_candidate_id"] = result.model_id
+            if result.decision:
+                state["last_promotion_decision"] = result.decision.to_dict()
+            self._save_state(state)
 
-        gate_dicts = decision.to_dict()["gate_results"]
-        promoted = False
-
-        if decision.approved:
-            promoted = self.registry.promote_to_production(
-                record.model_id,
-                decision.promoted_by,
-                gate_results=gate_dicts,
-            )
-        elif decision.promoted_by == "pending_manual":
-            self.registry.set_status(record.model_id, ModelStage.VALIDATED.value)
+        payload = result.to_dict()
+        if result.skipped:
+            payload["status"] = "skipped"
+        elif result.error:
+            payload["status"] = "error"
         else:
-            self.registry.set_status(
-                record.model_id,
-                ModelStage.REJECTED.value,
-                gate_results=gate_dicts,
-            )
-
-        record = self.registry.get_model(record.model_id) or record
-
-        state = self._load_state()
-        state["last_retrain"] = datetime.now(timezone.utc).isoformat()
-        state["last_candidate_id"] = record.model_id
-        state["last_promotion_decision"] = decision.to_dict()
-        self._save_state(state)
-
-        return {
-            "status": "retrained",
-            "model_id": record.model_id,
-            "promotion": decision.to_dict(),
-            "stage": record.status,
-            "promoted": promoted,
-            "model": record.to_dict(),
-            "registry": self.registry.status_summary(),
-        }
+            payload["status"] = "retrained"
+            rec = self.registry.get_model(result.model_id) if result.model_id else None
+            payload["model"] = rec.to_dict() if rec else None
+            payload["registry"] = self.registry.status_summary()
+        return payload
 
     def evaluate_candidate_metrics(self, metrics: dict, model_id: str) -> dict:
         decision = self.policy.evaluate(
@@ -157,6 +130,7 @@ class RetrainPipeline:
             )
             if not ok:
                 raise RuntimeError(f"Promotion failed for {model_id}")
+            self._inner._reload_prediction_models()
 
         out = self.registry.get_model(model_id).to_dict()
         out["promotion_decision"] = decision.to_dict()
@@ -166,5 +140,6 @@ class RetrainPipeline:
         ok = self.registry.rollback(model_id, rolled_back_by)
         if not ok:
             raise ValueError(f"Rollback failed for {model_id}")
+        self._inner._reload_prediction_models()
         rec = self.registry.get_model(model_id)
         return rec.to_dict() if rec else {}

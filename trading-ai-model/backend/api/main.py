@@ -7,10 +7,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from agents.news_runtime import start_news_background
 from api.routes import backtest, dashboard, health, market_state, models, news, signals, trades
+from learning.runtime import get_learning_agent
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    agent = get_learning_agent()
+    models.set_agents(agent, agent._registry, agent._policy)
     await start_news_background()
     yield
 
@@ -31,7 +34,7 @@ app.include_router(backtest.router, prefix="/backtest", tags=["backtest"])
 app.include_router(market_state.router, prefix="/state", tags=["market_state"])
 app.include_router(trades.router, prefix="/trades", tags=["trades"])
 app.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
-app.include_router(models.router, prefix="/models", tags=["models"])
+app.include_router(models.router)
 app.include_router(news.router, prefix="/news", tags=["news"])
 
 

@@ -13,6 +13,8 @@ from ml.models.base_model import BaseModel
 
 logger = logging.getLogger(__name__)
 
+_classifier_singleton: Optional["LightGBMSignalClassifier"] = None
+
 
 class LightGBMSignalClassifier(BaseModel):
     """Loads production LightGBM model; falls back to rules if missing."""
@@ -81,6 +83,27 @@ class LightGBMSignalClassifier(BaseModel):
             "model_version": "rule_fallback",
             "model_type": "rules",
         }
+
+    def reload(self) -> None:
+        """Re-read production artifact from disk (after registry promotion)."""
+        self._model = None
+        self._load()
+
+    @classmethod
+    def reload_singleton(cls) -> None:
+        """Refresh cached classifier used by PredictionAgent / SignalClassifier."""
+        global _classifier_singleton
+        if _classifier_singleton is not None:
+            _classifier_singleton.reload()
+        else:
+            _classifier_singleton = cls()
+
+    @classmethod
+    def get_singleton(cls) -> "LightGBMSignalClassifier":
+        global _classifier_singleton
+        if _classifier_singleton is None:
+            _classifier_singleton = cls()
+        return _classifier_singleton
 
     @staticmethod
     def save_model(booster, path: Path, version: str, metrics: dict) -> None:

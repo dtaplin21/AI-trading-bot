@@ -104,41 +104,30 @@ def test_session_summary(learning_setup):
     assert summary["avg_mae"] == 10.0
 
 
-def test_retrain_skips_when_insufficient_rows(learning_setup, monkeypatch):
-    agent, store, _, _ = learning_setup
-    monkeypatch.setattr(agent, "_train_lightgbm", lambda rows: None)
-    agent._new_samples = 100
-    agent._try_retrain()
-    assert agent._new_samples == 100
+def test_trigger_retrain_resets_sample_counter(learning_setup, monkeypatch):
+    from ml.training.retrain_pipeline import RetrainResult
 
-
-def test_retrain_weekly_gate(learning_setup, monkeypatch, tmp_path):
     agent, _, _, _ = learning_setup
-    state_path = tmp_path / "retrain_state.json"
-    monkeypatch.setattr("learning.learning_agent.RETRAIN_STATE_PATH", state_path)
-    state_path.write_text(
-        json.dumps({"last_retrain": datetime.now(tz=timezone.utc).isoformat()})
-    )
-    monkeypatch.setattr(agent, "_train_lightgbm", lambda rows: {"model": object()})
+    result = RetrainResult()
+    result.skipped = True
+    monkeypatch.setattr(agent._retrain, "run", lambda **kw: result)
     agent._new_samples = 100
-    agent._try_retrain()
-    assert agent._new_samples == 100
+    agent._trigger_retrain("MES", "5m")
+    assert agent._new_samples == 0
 
 
-def test_backtest_compare_without_production_model(learning_setup):
+def test_force_retrain_returns_summary(learning_setup, monkeypatch):
+    from ml.training.retrain_pipeline import RetrainResult
+
     agent, _, _, _ = learning_setup
-    import numpy as np
-
-    class FakeModel:
-        def predict(self, X):
-            return np.full(len(X), 0.6)
-
-    X = np.array([[1.0], [0.0], [1.0], [0.0]])
-    y = np.array([1, 0, 1, 0])
-    result = agent._backtest_compare(FakeModel(), X, y, ["feat"])
-    assert result["production_loaded"] is False
-    assert result["comparison"] == "world_state_calibration"
-    assert "current_brier" in result
+    result = RetrainResult()
+    result.model_id = "lgbm_test"
+    result.n_train = 50
+    result.n_holdout = 10
+    monkeypatch.setattr(agent._retrain, "run", lambda **kw: result)
+    summary = agent.force_retrain(requested_by="test")
+    assert summary["model_id"] == "lgbm_test"
+    assert summary["n_train"] == 50
 
 
 def test_paper_trader_auto_close_wires_learning(monkeypatch, tmp_path):

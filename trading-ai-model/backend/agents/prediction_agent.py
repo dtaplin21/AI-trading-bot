@@ -10,7 +10,14 @@ class PredictionAgent(BaseAgent):
     name = "prediction"
 
     def __init__(self):
+        from ml.models.lightgbm_classifier import LightGBMSignalClassifier
+
         self.classifier = SignalClassifier()
+        LightGBMSignalClassifier.get_singleton()
+
+    def reload_classifier(self) -> None:
+        """Reload production model after RetrainPipeline promotion."""
+        self.classifier.reload()
         self.min_confidence = 0.55
         self.min_signal_rank = 65
 
