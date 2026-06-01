@@ -46,17 +46,11 @@ logger = structlog.get_logger()
 
 
 async def start_watcher() -> None:
-    from agents.news.market_news_agent import MarketNewsAgent
+    from agents.news_runtime import get_watcher_news
     from chart_watcher.chart_watch_runner import ChartWatchRunner
 
-    news_agent = None
-    if os.getenv("ANTHROPIC_API_KEY") or os.getenv("FINNHUB_API_KEY"):
-        news_agent = MarketNewsAgent(
-            use_llm=bool(os.getenv("ANTHROPIC_API_KEY")),
-            polling_interval=int(os.getenv("NEWS_POLLING_INTERVAL", "60")),
-        )
-
-    runner = ChartWatchRunner(news_agent=news_agent)
+    news = get_watcher_news()
+    runner = ChartWatchRunner(news_agent=news)
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
 
@@ -72,7 +66,7 @@ async def start_watcher() -> None:
     print(f"  Mode:    {os.getenv('WATCHER_MODE', 'paper').upper()}")
     print(f"  Symbols: {os.getenv('WATCHER_SYMBOLS', 'MES,NQ')}")
     print(f"  TF:      {os.getenv('WATCHER_TIMEFRAMES', '1m,5m,15m,1h')}")
-    print(f"  API key: {'✓ set' if os.getenv('ANTHROPIC_API_KEY') else '✗ not set'}")
+    print(f"  News:    {os.getenv('WATCHER_NEWS_SOURCE', 'db').upper()} (API ingests when db)")
     print(f"  Kill sw: {os.getenv('RISK_KILL_SWITCH', 'false')}")
     print(f"{'=' * 55}\n")
     print("  Every trade is a probability over a series.\n")

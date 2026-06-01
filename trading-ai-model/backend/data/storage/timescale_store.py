@@ -19,6 +19,7 @@ from data.storage.news_repository import (
     news_features_row,
     risk_window_row,
     row_to_economic_event,
+    row_to_news_event,
     row_to_risk_window,
 )
 
@@ -402,6 +403,36 @@ class TimescaleStore:
                 cur.executemany(sql, rows)
             conn.commit()
         return len(rows)
+
+    def fetch_recent_news_events(
+        self,
+        hours: int = 6,
+        symbol: Optional[str] = None,
+        limit: int = 500,
+    ) -> list:
+        if not self._available:
+            return []
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+        sql = """
+            SELECT id, source, headline, summary, url, published_at, created_at,
+                   event_type, news_mode, sentiment_score, impact_score, urgency_score,
+                   volatility_score, sentiment_label, volatility_risk, impact_level,
+                   trade_action, explanation, symbols_affected, asset_classes
+            FROM news_events
+            WHERE published_at >= %s
+        """
+        params: list[Any] = [cutoff]
+        if symbol:
+            sql += " AND (%s = ANY(symbols_affected) OR news_mode = 'risk_event')"
+            params.append(symbol.upper())
+        sql += " ORDER BY published_at DESC LIMIT %s"
+        params.append(limit)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                cols = [d[0] for d in cur.description]
+                rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        return [row_to_news_event(r) for r in rows]
 
     def insert_economic_event(self, event) -> None:
         if not self._available:

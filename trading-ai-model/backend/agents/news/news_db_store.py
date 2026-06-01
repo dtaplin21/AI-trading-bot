@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from typing import Optional
+
 from agents.news.news_schemas import EconomicEvent, NewsEvent, NewsFeatures, NewsRiskWindow, SymbolNewsImpact
 from data.storage.timescale_store import TimescaleStore
 
@@ -49,6 +51,19 @@ class NewsDbStore:
 
     async def fetch_upcoming_economic_events(self, hours_ahead: int = 48):
         return await asyncio.to_thread(self._store.fetch_upcoming_economic_events, hours_ahead)
+
+    async def fetch_recent_news_events(
+        self,
+        hours: int = 6,
+        symbol: Optional[str] = None,
+        limit: int = 500,
+    ) -> list[NewsEvent]:
+        return await asyncio.to_thread(
+            self._store.fetch_recent_news_events,
+            hours,
+            symbol,
+            limit,
+        )
 
     @property
     def store(self) -> TimescaleStore:

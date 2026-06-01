@@ -37,6 +37,7 @@ from agents.news.market_news_agent import MarketNewsAgent
 from chart_watcher.bar_assembler import MultiSymbolAssembler
 from chart_watcher.session_scheduler import SessionScheduler, WatcherMode
 from config.agent_config import WATCHED_SYMBOLS, WATCHED_TIMEFRAMES
+from pipeline.feature_fusion_news_patch import NewsAgentProtocol
 from pipeline.schemas import OHLCV
 from pipeline.trading_supervisor import TradingPipelineSupervisor
 
@@ -63,7 +64,7 @@ class ChartWatchRunner:
         await runner.start()
     """
 
-    def __init__(self, news_agent: Optional[MarketNewsAgent] = None) -> None:
+    def __init__(self, news_agent: Optional[NewsAgentProtocol] = None) -> None:
         self._mode = WatcherMode(os.getenv("WATCHER_MODE", "paper").lower())
         self._scheduler = SessionScheduler()
         self._news = news_agent
@@ -99,9 +100,7 @@ class ChartWatchRunner:
                 paper_mode=True,
             )
 
-        if self._news:
-            self._news.start_background()
-            logger.info("ChartWatchRunner: news agent started (background)")
+        await self._start_news()
 
         logger.info(
             "ChartWatchRunner: STARTING | mode=%s | %d symbols | kill_switch=%s",
@@ -119,6 +118,7 @@ class ChartWatchRunner:
                 await self._run_paper()
         finally:
             self._running = False
+            await self._stop_news()
             await self._assembler.flush_all()
             logger.info(
                 "ChartWatchRunner: stopped | bars_processed=%s",
@@ -127,7 +127,23 @@ class ChartWatchRunner:
 
     async def stop(self) -> None:
         self._running = False
+        await self._stop_news()
         logger.info("ChartWatchRunner: stop requested")
+
+    async def _start_news(self) -> None:
+        if not self._news:
+            return
+        if hasattr(self._news, "start_refresh"):
+            await self._news.start_refresh()
+            logger.info("ChartWatchRunner: DbNewsReader refresh started (no ingestion)")
+        elif isinstance(self._news, MarketNewsAgent):
+            self._news.start_background()
+            logger.info("ChartWatchRunner: MarketNewsAgent background started (local mode)")
+
+    async def _stop_news(self) -> None:
+        if not self._news or not hasattr(self._news, "stop"):
+            return
+        await self._news.stop()
 
     async def _run_paper(self) -> None:
         logger.info("ChartWatchRunner: PAPER mode | data_path=%s", DATA_PATH)

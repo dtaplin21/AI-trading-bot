@@ -229,6 +229,39 @@ def news_features_row(
     )
 
 
+def row_to_news_event(row: dict[str, Any]) -> NewsEvent:
+    def _enum(enum_cls, val, default):
+        if not val:
+            return default
+        try:
+            return enum_cls(val)
+        except ValueError:
+            return default
+
+    return NewsEvent(
+        id=str(row["id"]) if row.get("id") else None,
+        source=_parse_source(row.get("source")),
+        headline=row.get("headline") or "",
+        summary=row.get("summary"),
+        url=row.get("url"),
+        published_at=_aware(row["published_at"]),
+        created_at=_aware(row.get("created_at") or row["published_at"]),
+        event_type=_enum(EventType, row.get("event_type"), EventType.UNKNOWN),
+        news_mode=_enum(NewsMode, row.get("news_mode"), NewsMode.INFORMATIONAL),
+        symbols_affected=list(row.get("symbols_affected") or []),
+        asset_classes=list(row.get("asset_classes") or []),
+        sentiment_score=float(row.get("sentiment_score") or 0),
+        impact_score=float(row.get("impact_score") or 0),
+        urgency_score=float(row.get("urgency_score") or 0),
+        volatility_score=float(row.get("volatility_score") or 0),
+        sentiment_label=_enum(SentimentLabel, row.get("sentiment_label"), SentimentLabel.NEUTRAL),
+        volatility_risk=_enum(VolatilityRisk, row.get("volatility_risk"), VolatilityRisk.LOW),
+        impact_level=_enum(ImpactLevel, row.get("impact_level"), ImpactLevel.LOW),
+        trade_action=row.get("trade_action") or "none",
+        explanation=row.get("explanation") or "",
+    )
+
+
 def news_event_insert_row(event: NewsEvent) -> tuple:
     pub = _aware(event.published_at)
     created = _aware(event.created_at)

@@ -79,7 +79,7 @@ class TradingPipelineSupervisor:
         self,
         symbol: str,
         timeframe: str,
-        news_agent: Optional[MarketNewsAgent] | object = _UNSET,
+        news_agent: Optional[NewsAgentProtocol] | object = _UNSET,
         world_store=None,
         session_mgr: Optional[SessionProbabilityManager] = None,
         paper_mode: bool = True,

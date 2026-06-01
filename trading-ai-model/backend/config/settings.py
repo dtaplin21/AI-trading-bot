@@ -80,6 +80,10 @@ class Settings(BaseSettings):
     news_calendar_days_ahead: int = 14
     news_calendar_trigger_offsets: str = "-15,0,5"
 
+    # Watcher news — read from DB (API owns ingestion); set "local" for standalone watch
+    watcher_news_source: str = "db"
+    watcher_news_refresh_seconds: int = 60
+
     # News API keys (optional — RSS + FRED public demo work without keys)
     finnhub_api_key: str = ""
     benzinga_api_key: str = ""
