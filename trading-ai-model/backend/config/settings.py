@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     # Model / ML
     model_dir: str = "./models"
     production_model_id: str = "lightgbm_production"
-    retrain_schedule_days: int = 7
+    retrain_schedule_days: int = 1
     data_stale_minutes: int = 15
 
     # LLM — Anthropic only (explanation & news; never executes trades)

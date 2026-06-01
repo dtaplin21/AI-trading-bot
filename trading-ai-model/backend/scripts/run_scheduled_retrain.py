@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Cron entrypoint: python scripts/run_scheduled_retrain.py"""
+"""Cron entrypoint: python scripts/run_scheduled_retrain.py
+
+Schedule daily (default RETRAIN_SCHEDULE_DAYS=1), e.g. cron: 0 2 * * *
+"""
 
 import json
 import sys

@@ -171,3 +171,12 @@ def test_replay_bars_sorted_anti_lookahead():
     bars = [_bar("MES", 2), _bar("NQ", 0), _bar("MES", 1)]
     bars.sort(key=lambda b: b.timestamp)
     assert [b.timestamp for b in bars] == sorted(b.timestamp for b in bars)
+
+
+def test_parse_bar_timestamp_iso_and_epoch():
+    from chart_watcher.chart_watch_runner import _parse_bar_timestamp
+
+    iso = _parse_bar_timestamp("2025-01-06T14:30:00+00:00")
+    assert iso.year == 2025 and iso.hour == 14
+    epoch = _parse_bar_timestamp(1_705_000_000)
+    assert epoch.tzinfo is not None

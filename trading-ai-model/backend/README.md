@@ -28,11 +28,11 @@ pip install -e ".[storage]"
 
 Candles are stored automatically by the Market Data Agent on each pipeline run.
 
-### Model retraining (weekly, manual promotion)
+### Model retraining (daily schedule, manual promotion)
 
 ```bash
 pip install -e ".[ml]"
-python scripts/run_scheduled_retrain.py
+python scripts/run_scheduled_retrain.py   # cron: daily, e.g. 0 2 * * *
 # Then via API:
 # POST /models/{id}/approve
 # POST /models/{id}/promote?approved_by=your_name

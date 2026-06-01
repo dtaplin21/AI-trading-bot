@@ -20,7 +20,7 @@ def list_models():
 
 @router.post("/retrain")
 def trigger_retrain(force: bool = Query(False)):
-    """Weekly retrain — creates candidate model only, never auto-promotes."""
+    """Daily retrain — creates candidate model only, never auto-promotes."""
     return _pipeline.run_scheduled_retrain(force=force)
 
 

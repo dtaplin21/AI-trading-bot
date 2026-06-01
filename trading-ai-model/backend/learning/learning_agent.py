@@ -31,7 +31,7 @@ Env:
   LLM_ENABLED          — master switch (default false)
   ANTHROPIC_API_KEY    — API key (never hardcoded; set in .env only)
   ANTHROPIC_MODEL      — model id (default claude-sonnet-4-20250514)
-  LEARNING_RETRAIN_WEEKLY    (bool,  default true)
+  LEARNING_RETRAIN_SCHEDULED  (bool,  default true) — gate retrains by RETRAIN_SCHEDULE_DAYS
   LEARNING_PAPER_DAYS        (int,   default 5)
   LEARNING_BRIER_IMPROVEMENT (float, default 0.01)
   LEARNING_OUTCOMES_LOG      (path,  default logs/outcomes.jsonl)
@@ -55,7 +55,10 @@ MIN_NEW_SAMPLES = int(os.getenv("LEARNING_MIN_SAMPLES", "100"))
 BRIER_IMPROVEMENT = float(os.getenv("LEARNING_BRIER_IMPROVEMENT", "0.01"))
 PAPER_DAYS_BEFORE_LIVE = int(os.getenv("LEARNING_PAPER_DAYS", "5"))
 OUTCOMES_LOG_PATH = Path(os.getenv("LEARNING_OUTCOMES_LOG", "logs/outcomes.jsonl"))
-RETRAIN_WEEKLY = os.getenv("LEARNING_RETRAIN_WEEKLY", "true").lower() == "true"
+RETRAIN_SCHEDULED = os.getenv(
+    "LEARNING_RETRAIN_SCHEDULED",
+    os.getenv("LEARNING_RETRAIN_WEEKLY", "true"),
+).lower() == "true"
 RETRAIN_STATE_PATH = Path(os.getenv("LEARNING_RETRAIN_STATE", "logs/learning_retrain_state.json"))
 
 META_COLS = frozenset(
@@ -188,7 +191,10 @@ class LearningAgent:
         """
         try:
             if not self._retrain_allowed():
-                logger.info("LearningAgent: weekly retrain gate — skipping until next window")
+                logger.info(
+                    "LearningAgent: retrain schedule gate — skipping until next window (%dd)",
+                    self._retrain_interval_days(),
+                )
                 return
 
             rows = self._world.get_training_rows(last_n_days=90)
@@ -255,8 +261,13 @@ class LearningAgent:
         except Exception as e:
             logger.error("LearningAgent: retrain failed: %s", e, exc_info=True)
 
+    def _retrain_interval_days(self) -> int:
+        from config.settings import get_settings
+
+        return max(1, int(get_settings().retrain_schedule_days))
+
     def _retrain_allowed(self) -> bool:
-        if not RETRAIN_WEEKLY:
+        if not RETRAIN_SCHEDULED:
             return True
         state = self._load_retrain_state()
         last = state.get("last_retrain")
@@ -265,7 +276,7 @@ class LearningAgent:
         last_dt = datetime.fromisoformat(last)
         if last_dt.tzinfo is None:
             last_dt = last_dt.replace(tzinfo=timezone.utc)
-        return datetime.now(tz=timezone.utc) - last_dt >= timedelta(days=7)
+        return datetime.now(tz=timezone.utc) - last_dt >= timedelta(days=self._retrain_interval_days())
 
     def _load_retrain_state(self) -> dict:
         if not RETRAIN_STATE_PATH.exists():

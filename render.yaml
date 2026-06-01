@@ -1,0 +1,46 @@
+# Render deployment sketch — adjust repo root / build commands for your setup.
+# Web service: FastAPI dashboard API
+# Worker: live chart watcher + pipeline (Polygon market data)
+
+services:
+  - type: web
+    name: trading-ai-api
+    runtime: python
+    rootDir: trading-ai-model/backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py --mode api
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ai-trading-bot-db
+          property: connectionString
+      - key: NEWS_ENABLED
+        value: "true"
+
+  - type: worker
+    name: trading-ai-worker
+    runtime: python
+    rootDir: trading-ai-model/backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py --mode worker
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ai-trading-bot-db
+          property: connectionString
+      - key: WATCHER_MODE
+        value: live
+      - key: WATCHER_NEWS_SOURCE
+        value: db
+      - key: BROKER
+        value: polygon
+      - key: ENABLED_BROKERS
+        value: paper
+      - key: POLYGON_API_KEY
+        sync: false
+
+databases:
+  - name: ai-trading-bot-db
+    databaseName: trading_ai
+    user: trading
+    plan: free

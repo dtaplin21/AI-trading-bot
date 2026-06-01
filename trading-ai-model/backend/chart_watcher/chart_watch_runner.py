@@ -29,10 +29,11 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Optional, Union
 
 import pandas as pd
 
+from agents.news.db_news_reader import DbNewsReader
 from agents.news.market_news_agent import MarketNewsAgent
 from chart_watcher.bar_assembler import MultiSymbolAssembler
 from chart_watcher.session_scheduler import SessionScheduler, WatcherMode
@@ -55,6 +56,24 @@ DATA_PATH = Path(os.getenv("WATCHER_DATA_PATH", "data/ohlcv"))
 MIN_OHLCV_BARS = 20
 
 
+def _parse_bar_timestamp(ts_raw: object) -> datetime:
+    """Parse ISO or unix epoch from CSV/JSONL timestamp fields."""
+    if ts_raw is None:
+        raise ValueError("missing timestamp")
+    if isinstance(ts_raw, (int, float)):
+        return datetime.fromtimestamp(float(ts_raw), tz=timezone.utc)
+    text = str(ts_raw).strip()
+    if not text:
+        raise ValueError("empty timestamp")
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return datetime.fromtimestamp(float(text), tz=timezone.utc)
+
+
+NewsHandle = Union[NewsAgentProtocol, DbNewsReader, MarketNewsAgent]
+
+
 class ChartWatchRunner:
     """
     The always-on loop. One instance runs the entire system.
@@ -64,7 +83,7 @@ class ChartWatchRunner:
         await runner.start()
     """
 
-    def __init__(self, news_agent: Optional[NewsAgentProtocol] = None) -> None:
+    def __init__(self, news_agent: Optional[NewsHandle] = None) -> None:
         self._mode = WatcherMode(os.getenv("WATCHER_MODE", "paper").lower())
         self._scheduler = SessionScheduler()
         self._news = news_agent
@@ -79,6 +98,8 @@ class ChartWatchRunner:
 
         self._bars_processed: dict[str, int] = {s: 0 for s in SYMBOLS}
         self._started_at: Optional[datetime] = None
+        self._last_live_bar_ts: dict[str, datetime] = {}
+        self._broker_adapter = None
 
         logger.info(
             "ChartWatchRunner: mode=%s | symbols=%s | timeframes=%s",
@@ -131,9 +152,7 @@ class ChartWatchRunner:
         logger.info("ChartWatchRunner: stop requested")
 
     async def _start_news(self) -> None:
-        if not self._news:
-            return
-        if hasattr(self._news, "start_refresh"):
+        if isinstance(self._news, DbNewsReader):
             await self._news.start_refresh()
             logger.info("ChartWatchRunner: DbNewsReader refresh started (no ingestion)")
         elif isinstance(self._news, MarketNewsAgent):
@@ -141,9 +160,8 @@ class ChartWatchRunner:
             logger.info("ChartWatchRunner: MarketNewsAgent background started (local mode)")
 
     async def _stop_news(self) -> None:
-        if not self._news or not hasattr(self._news, "stop"):
-            return
-        await self._news.stop()
+        if isinstance(self._news, (DbNewsReader, MarketNewsAgent)):
+            await self._news.stop()
 
     async def _run_paper(self) -> None:
         logger.info("ChartWatchRunner: PAPER mode | data_path=%s", DATA_PATH)
@@ -176,10 +194,7 @@ class ChartWatchRunner:
                     return
                 try:
                     ts_raw = row.get("timestamp") or row.get("time") or row.get("date")
-                    try:
-                        ts = datetime.fromisoformat(str(ts_raw)).replace(tzinfo=timezone.utc)
-                    except ValueError:
-                        ts = datetime.fromtimestamp(float(ts_raw), tz=timezone.utc)
+                    ts = _parse_bar_timestamp(ts_raw)
 
                     yield OHLCV(
                         symbol=symbol,
@@ -206,10 +221,7 @@ class ChartWatchRunner:
                 try:
                     d = json.loads(line)
                     ts_raw = d.get("timestamp") or d.get("time") or d.get("t")
-                    try:
-                        ts = datetime.fromisoformat(str(ts_raw)).replace(tzinfo=timezone.utc)
-                    except (ValueError, TypeError):
-                        ts = datetime.fromtimestamp(float(ts_raw), tz=timezone.utc)
+                    ts = _parse_bar_timestamp(ts_raw)
 
                     yield OHLCV(
                         symbol=symbol,
@@ -324,7 +336,10 @@ class ChartWatchRunner:
                 yield bar
 
     async def _run_live(self) -> None:
+        from live.broker_adapter import get_broker_adapter
+
         broker = os.getenv("BROKER", "none").lower()
+        self._broker_adapter = get_broker_adapter(broker)
         logger.info(
             "ChartWatchRunner: LIVE mode | broker=%s | interval=%ds",
             broker,
@@ -355,17 +370,33 @@ class ChartWatchRunner:
 
     async def _poll_symbol(self, symbol: str, broker: str) -> None:
         bar = await self._fetch_live_candle(symbol, broker)
-        if bar:
-            await self._route_bar(bar)
+        if not bar:
+            return
+        last_ts = self._last_live_bar_ts.get(symbol)
+        bar_ts = bar.timestamp if bar.timestamp.tzinfo else bar.timestamp.replace(tzinfo=timezone.utc)
+        if last_ts and bar_ts <= last_ts:
+            return
+        self._last_live_bar_ts[symbol] = bar_ts
+        await self._route_bar(bar)
 
     async def _fetch_live_candle(self, symbol: str, broker: str) -> Optional[OHLCV]:
-        logger.warning(
-            "ChartWatchRunner[%s]: live broker adapter not wired (broker=%s). "
-            "Implement _fetch_live_candle() or use WATCHER_MODE=paper.",
-            symbol,
-            broker,
-        )
-        return None
+        adapter = self._broker_adapter
+        if adapter is None:
+            from live.broker_adapter import get_broker_adapter
+
+            adapter = get_broker_adapter(broker)
+            self._broker_adapter = adapter
+        try:
+            return await adapter.fetch_latest_bar(symbol, "1m")
+        except Exception as exc:
+            logger.error(
+                "ChartWatchRunner[%s]: broker adapter failed (%s): %s",
+                symbol,
+                broker,
+                exc,
+                exc_info=True,
+            )
+            return None
 
     async def _route_bar(self, bar: OHLCV) -> None:
         asm = self._assembler.get(bar.symbol)

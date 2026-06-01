@@ -7,7 +7,8 @@ Modes:
   python main.py --mode api      ← FastAPI server only
   python main.py --mode replay   ← historical backtest
   python main.py --mode research ← method isolation testing
-  python main.py --mode live     ← live trading (broker adapter required)
+  python main.py --mode worker   ← production worker (live bars + pipeline; Render background worker)
+  python main.py --mode live     ← live trading (broker adapter; interactive confirm)
 
 Env vars (.env):
   WATCHER_MODE       live | replay | paper
@@ -43,6 +44,26 @@ structlog.configure(
     ]
 )
 logger = structlog.get_logger()
+
+
+async def start_worker() -> None:
+    """Background worker: live chart watcher + pipeline (no UI)."""
+    from live.broker_adapter import default_worker_broker
+
+    os.environ.setdefault("WATCHER_MODE", "live")
+    broker = default_worker_broker()
+    os.environ.setdefault("BROKER", broker)
+
+    print(f"\n{'=' * 55}")
+    print("  Trading AI — Background Worker")
+    print(f"  Watcher: LIVE")
+    print(f"  Broker:  {os.environ['BROKER'].upper()} (market data)")
+    print(f"  Symbols: {os.getenv('WATCHER_SYMBOLS', 'MES,NQ')}")
+    print(f"  News:    {os.getenv('WATCHER_NEWS_SOURCE', 'db').upper()}")
+    print(f"  Kill sw: {os.getenv('RISK_KILL_SWITCH', 'false')}")
+    print(f"{'=' * 55}\n")
+
+    await start_watcher()
 
 
 async def start_watcher() -> None:
@@ -193,7 +214,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Trading AI Model")
     parser.add_argument(
         "--mode",
-        choices=["dev", "watch", "api", "replay", "research", "live"],
+        choices=["dev", "watch", "api", "replay", "research", "live", "worker"],
         default="dev",
     )
     args = parser.parse_args()
@@ -212,6 +233,7 @@ def main() -> None:
 
     runners = {
         "watch": start_watcher,
+        "worker": start_worker,
         "api": start_api,
         "replay": start_replay,
         "research": start_research,

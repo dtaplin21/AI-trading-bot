@@ -98,5 +98,5 @@ Returns full `PipelineDecision` + `llm_explanation` when LLM enabled.
 |-----------|--------|-------|
 | TimescaleDB | `data/storage/timescale_store.py` | `docker compose up -d` |
 | LightGBM | `ml/models/lightgbm_classifier.py` | Falls back to rules if no model |
-| Retrain pipeline | `agents/learning/retrain_pipeline.py` | Weekly schedule, manual promote |
+| Retrain pipeline | `agents/learning/retrain_pipeline.py` | Daily schedule (RETRAIN_SCHEDULE_DAYS=1), manual promote |
 | LLM explainer | `agents/llm_explainer.py` | Explanation only, never executes |
