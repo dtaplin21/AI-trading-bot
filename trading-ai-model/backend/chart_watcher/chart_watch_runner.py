@@ -37,16 +37,16 @@ from agents.news.db_news_reader import DbNewsReader
 from agents.news.market_news_agent import MarketNewsAgent
 from chart_watcher.bar_assembler import MultiSymbolAssembler
 from chart_watcher.session_scheduler import SessionScheduler, WatcherMode
-from config.agent_config import WATCHED_SYMBOLS, WATCHED_TIMEFRAMES
+from config.agent_config import WATCHED_TIMEFRAMES
+from config.symbols import watcher_symbols_from_env
 from pipeline.feature_fusion_news_patch import NewsAgentProtocol
 from pipeline.schemas import OHLCV
 from pipeline.trading_supervisor import TradingPipelineSupervisor
 
 logger = logging.getLogger(__name__)
 
-_sym_env = os.getenv("WATCHER_SYMBOLS", ",".join(WATCHED_SYMBOLS))
 _tf_env = os.getenv("WATCHER_TIMEFRAMES", ",".join(WATCHED_TIMEFRAMES))
-SYMBOLS = [s.strip().upper() for s in _sym_env.split(",") if s.strip()]
+SYMBOLS = watcher_symbols_from_env()
 TIMEFRAMES = [t.strip() for t in _tf_env.split(",") if t.strip()]
 
 LOG_BARS = os.getenv("WATCHER_LOG_BARS", "false").lower() == "true"

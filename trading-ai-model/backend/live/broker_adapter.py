@@ -16,28 +16,16 @@ from typing import Optional
 
 import httpx
 
+from config.symbols import get_symbol_or_none, massive_symbol, polygon_ticker_map
 from pipeline.schemas import OHLCV
 
 logger = logging.getLogger(__name__)
 
 HTTP_TIMEOUT = 15.0
 
-# Override per symbol via POLYGON_TICKER_MES=... or POLYGON_FUTURES_TICKER_MAP JSON
-DEFAULT_POLYGON_TICKERS: dict[str, str] = {
-    "MES": "C:MES",
-    "ES": "C:ES",
-    "NQ": "C:NQ",
-    "MNQ": "C:MNQ",
-    "CL": "C:CL",
-    "GC": "C:GC",
-    "ZB": "C:ZB",
-    "RTY": "C:RTY",
-    "YM": "C:YM",
-}
-
 
 def _load_polygon_ticker_map() -> dict[str, str]:
-    mapping = dict(DEFAULT_POLYGON_TICKERS)
+    mapping = polygon_ticker_map()
     raw = os.getenv("POLYGON_FUTURES_TICKER_MAP", "").strip()
     if raw:
         try:
@@ -89,7 +77,11 @@ class PolygonBrokerAdapter(BrokerAdapter):
 
     def resolve_ticker(self, symbol: str) -> str:
         sym = symbol.upper()
-        return self._ticker_map.get(sym, f"C:{sym}")
+        if sym in self._ticker_map:
+            return self._ticker_map[sym]
+        if get_symbol_or_none(sym):
+            return massive_symbol(sym)
+        return f"C:{sym}"
 
     async def fetch_latest_bar(self, symbol: str, timeframe: str = "1m") -> Optional[OHLCV]:
         if timeframe != "1m":

@@ -15,7 +15,10 @@ from live.broker_adapter import (
 
 @pytest.mark.asyncio
 async def test_polygon_fetch_latest_bar():
-    adapter = PolygonBrokerAdapter(api_key="test-key", ticker_map={"MES": "C:MES"})
+    adapter = PolygonBrokerAdapter(
+        api_key="test-key",
+        ticker_map={"MES": "C:MES", "BTCUSD": "X:BTCUSD", "TSLA": "TSLA"},
+    )
     payload = {
         "results": [
             {
@@ -45,6 +48,13 @@ async def test_polygon_fetch_latest_bar():
     assert bar.symbol == "MES"
     assert bar.close == 5401.0
     assert bar.timeframe == "1m"
+
+
+def test_polygon_resolve_ticker_from_symbols_registry():
+    adapter = PolygonBrokerAdapter(api_key="test")
+    assert adapter.resolve_ticker("EURUSD") == "C:EURUSD"
+    assert adapter.resolve_ticker("BTCUSD") == "X:BTCUSD"
+    assert adapter.resolve_ticker("NVDA") == "NVDA"
 
 
 def test_get_broker_adapter_polygon():

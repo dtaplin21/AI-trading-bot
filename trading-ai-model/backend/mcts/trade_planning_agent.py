@@ -31,23 +31,10 @@ from mcts.expectimax_engine import ExpectimaxEngine
 from mcts.mcts_planner import HierarchicalMCTSPlanner
 from pipeline.confluence_report import ConfluenceReport
 from pipeline.probability_gate import ProbabilityGate
+from config.symbols import TICK_VALUES, get_symbol_or_none
 from pipeline.schemas import TradeAction, TradePlan
 
 logger = logging.getLogger(__name__)
-
-TICK_VALUES = {
-    "MES": 1.25,
-    "ES": 12.50,
-    "MNQ": 0.50,
-    "NQ": 5.00,
-    "MYM": 0.50,
-    "YM": 5.00,
-    "RTY": 5.00,
-    "CL": 10.0,
-    "GC": 10.0,
-    "ZB": 31.25,
-    "ZN": 15.625,
-}
 MCTS_THRESHOLD = float(os.getenv("MCTS_CONFIDENCE_THRESHOLD", "0.55"))
 BEAM_CONFLICT_MAX = 0.25
 
@@ -63,12 +50,10 @@ class TradePlanningAgent:
         self.timeframe = timeframe
         self.last_planner = "none"
         self.last_audit: dict | None = None
-        tick_value = float(
-            os.getenv(
-                f"TICK_VALUE_{symbol.upper()}",
-                str(TICK_VALUES.get(symbol.upper(), 1.25)),
-            )
-        )
+        sym = symbol.upper()
+        spec = get_symbol_or_none(sym)
+        default_tick = TICK_VALUES.get(sym, spec.tick_value if spec else 1.25)
+        tick_value = float(os.getenv(f"TICK_VALUE_{sym}", str(default_tick)))
         self._gate = ProbabilityGate()
         self._expectimax = ExpectimaxEngine(tick_value=tick_value)
         self._beam = BeamSearchPlanner(tick_value=tick_value)

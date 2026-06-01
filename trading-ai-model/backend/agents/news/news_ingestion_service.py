@@ -26,6 +26,7 @@ from typing import Awaitable, Callable, Optional
 import httpx
 
 from agents.news.news_schemas import NewsSource, RawNewsItem
+from config.symbols import DEFAULT_WATCHER_SYMBOLS
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +55,7 @@ RSS_FEEDS = {
     "wsj_markets": "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
 }
 
-WATCHED_SYMBOLS = [
-    "ES", "MES", "NQ", "MNQ", "RTY", "YM", "MYM",
-    "CL", "GC", "SI", "ZB", "ZN", "6E", "6J",
-    "SPY", "QQQ", "TSLA", "AAPL", "NVDA", "MSFT", "AMZN", "META",
-]
+WATCHED_SYMBOLS = list(DEFAULT_WATCHER_SYMBOLS)
 
 
 def _utc_now() -> datetime:
