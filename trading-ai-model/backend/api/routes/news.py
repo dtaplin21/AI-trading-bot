@@ -3,22 +3,48 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Query
+from pydantic import BaseModel
 
 from agents.news.news_schemas import EconomicEvent, EventType, ImpactLevel, NewsSource
-from agents.news_runtime import get_news_agent
+from agents.news_runtime import (
+    get_news_agent,
+    get_polling_status,
+    is_news_polling_enabled,
+    set_news_polling_enabled,
+)
 
 router = APIRouter()
 
 
+class NewsPollingUpdate(BaseModel):
+    enabled: bool
+
+
+@router.get("/polling")
+def news_polling_status():
+    """Runtime switch for automatic news ingest (baseline + calendar triggers)."""
+    return get_polling_status()
+
+
+@router.put("/polling")
+async def update_news_polling(body: NewsPollingUpdate):
+    return await set_news_polling_enabled(body.enabled)
+
+
 @router.get("/status")
 def news_status():
-    return get_news_agent().get_status()
+    status = get_news_agent().get_status()
+    status["polling_enabled"] = is_news_polling_enabled()
+    return status
 
 
 @router.post("/refresh")
 async def refresh_news():
+    """Manual one-shot ingest (works even when automatic polling is off)."""
     events = await get_news_agent().run_once()
-    return {"ingested": len(events), "status": get_news_agent().get_status()}
+    status = get_news_agent().get_status()
+    status["polling_enabled"] = is_news_polling_enabled()
+    return {"ingested": len(events), "status": status}
 
 
 @router.get("/features/{symbol}")

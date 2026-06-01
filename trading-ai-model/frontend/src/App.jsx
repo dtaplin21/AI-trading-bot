@@ -13,6 +13,12 @@ export default function App() {
   const [loadingDashboard, setLoadingDashboard] = useState(true);
   const [error, setError] = useState(null);
 
+  const handlePollingChange = (updatedPolling) => {
+    setDashboard((prev) =>
+      prev ? { ...prev, news_polling: updatedPolling } : prev
+    );
+  };
+
   useEffect(() => {
     let cancelled = false;
 
@@ -67,7 +73,11 @@ export default function App() {
         </div>
       )}
 
-      <SystemStatusPanel dashboard={dashboard} loading={loadingDashboard} />
+      <SystemStatusPanel
+        dashboard={dashboard}
+        loading={loadingDashboard}
+        onPollingChange={handlePollingChange}
+      />
 
       <h2 style={{ margin: "0 0 1rem", fontSize: 18, fontWeight: 500 }}>Closed trades</h2>
       <TradeResultsDashboard trades={trades.length ? trades : undefined} loading={loadingTrades} />

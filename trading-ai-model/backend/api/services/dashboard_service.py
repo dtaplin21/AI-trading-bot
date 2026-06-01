@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from agents.news_runtime import get_news_agent
+from agents.news_runtime import get_news_agent, get_polling_status
 from config.broker_platforms import build_broker_platforms, primary_execution_broker
 from config.settings import get_settings
 from config.watchlist import DEFAULT_WATCHLIST, parse_watchlist
@@ -17,7 +17,7 @@ def build_services() -> list[dict[str, Any]]:
     """Internal infrastructure (not broker platforms) — optional detail for ops."""
     settings = get_settings()
     store = TimescaleStore()
-    news_status = get_news_agent().get_status()
+    polling = get_polling_status()
 
     return [
         {
@@ -29,8 +29,12 @@ def build_services() -> list[dict[str, Any]]:
         {
             "id": "news_agent",
             "name": "News Intelligence",
-            "status": "connected" if news_status.get("running") else "disconnected",
-            "detail": f"{news_status.get('cached_events', 0)} events cached",
+            "status": "connected" if polling.get("running") else "disabled",
+            "detail": (
+                f"Polling on · {polling.get('cached_events', 0)} cached"
+                if polling.get("enabled") and polling.get("running")
+                else f"Polling off · {polling.get('cached_events', 0)} cached"
+            ),
         },
         {
             "id": "lightgbm",
@@ -117,4 +121,5 @@ def build_dashboard() -> dict[str, Any]:
         "open_position_count": len(build_open_positions()),
         "watched_charts": build_watched_charts(),
         "watched_chart_count": len(build_watched_charts()),
+        "news_polling": get_polling_status(),
     }

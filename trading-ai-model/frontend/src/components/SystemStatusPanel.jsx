@@ -2,6 +2,8 @@
  * SystemStatusPanel — connected platforms, open positions, watched charts.
  */
 
+import NewsPollingToggle from "./NewsPollingToggle.jsx";
+
 const STATUS_STYLE = {
   connected: { bg: "#EAF3DE", text: "#27500A", label: "Connected" },
   configured: { bg: "#E6F1FB", text: "#185FA5", label: "Configured" },
@@ -277,7 +279,7 @@ export const MOCK_DASHBOARD = {
   ],
 };
 
-export default function SystemStatusPanel({ dashboard, loading = false }) {
+export default function SystemStatusPanel({ dashboard, loading = false, onPollingChange }) {
   if (loading) {
     return (
       <div style={{ padding: "1.5rem 0", color: "var(--color-text-tertiary)", fontSize: 14 }}>
@@ -310,25 +312,28 @@ export default function SystemStatusPanel({ dashboard, loading = false }) {
           borderRadius: "var(--border-radius-lg)",
         }}
       >
-        <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
-          Active:{" "}
-          <strong style={{ color: "var(--color-text-primary)" }}>
-            {platforms.find((p) => p.id === data.active_broker)?.name || data.active_broker || "—"}
-          </strong>
-        </span>
-        <span style={{ color: "var(--color-border-tertiary)" }}>|</span>
-        <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
-          <strong style={{ color: "#27500A" }}>{summary.connected ?? 0}</strong> connected
-        </span>
-        <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
-          <strong style={{ color: "#185FA5" }}>{summary.configured ?? 0}</strong> configured
-        </span>
-        <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
-          <strong>{openPositions.length}</strong> open trades
-        </span>
-        <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
-          <strong>{watchedCharts.length}</strong> charts watched
-        </span>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", flex: 1 }}>
+          <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
+            Active:{" "}
+            <strong style={{ color: "var(--color-text-primary)" }}>
+              {platforms.find((p) => p.id === data.active_broker)?.name || data.active_broker || "—"}
+            </strong>
+          </span>
+          <span style={{ color: "var(--color-border-tertiary)" }}>|</span>
+          <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
+            <strong style={{ color: "#27500A" }}>{summary.connected ?? 0}</strong> connected
+          </span>
+          <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
+            <strong style={{ color: "#185FA5" }}>{summary.configured ?? 0}</strong> configured
+          </span>
+          <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
+            <strong>{openPositions.length}</strong> open trades
+          </span>
+          <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
+            <strong>{watchedCharts.length}</strong> charts watched
+          </span>
+        </div>
+        <NewsPollingToggle polling={data.news_polling} onChange={onPollingChange} />
       </div>
 
       <div
