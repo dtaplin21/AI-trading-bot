@@ -13,6 +13,7 @@ import numpy as np
 from config.settings import get_settings
 from ml.features.feature_vector import extract_vector
 from ml.models.lightgbm_classifier import LightGBMSignalClassifier
+from ml.promotion.holdout_metrics import metrics_from_booster
 
 
 def load_training_rows(log_dir: Path, store_rows: list[dict] | None = None) -> tuple[np.ndarray, np.ndarray]:
@@ -63,7 +64,11 @@ def train(output_path: Path | None = None, version: str | None = None) -> dict:
 
     import lightgbm as lgb  # noqa: PLC0415
 
-    train_data = lgb.Dataset(X, label=y)
+    split = max(int(len(X) * 0.8), len(X) - max(len(X) // 5, 10))
+    split = min(split, len(X) - 5)
+    X_train, y_train = X[:split], y[:split]
+
+    train_data = lgb.Dataset(X_train, label=y_train)
     params = {
         "objective": "binary",
         "metric": "auc",
@@ -73,12 +78,21 @@ def train(output_path: Path | None = None, version: str | None = None) -> dict:
     }
     booster = lgb.train(params, train_data, num_boost_round=100)
 
-    preds = booster.predict(X)
-    auc = float(np.mean((preds > 0.5) == y))
+    holdout = metrics_from_booster(
+        booster, X, y, production_path=model_dir / "lightgbm_production.txt"
+    )
+
     version = version or f"lgbm_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
     model_id = str(uuid.uuid4())[:8]
     out = output_path or model_dir / f"candidate_{model_id}.txt"
-    metrics = {"train_auc_proxy": auc, "samples": len(y), "positive_rate": float(y.mean())}
+    metrics = {
+        "samples": int(holdout["samples"]),
+        "positive_rate": holdout["positive_rate"],
+        "holdout_brier": holdout["holdout_brier"],
+        "holdout_auc": holdout["holdout_auc"],
+        "production_brier": holdout["production_brier"],
+        "train_auc_proxy": holdout["train_auc_proxy"],
+    }
     LightGBMSignalClassifier.save_model(booster, out, version, metrics)
 
     return {

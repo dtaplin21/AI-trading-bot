@@ -1,26 +1,35 @@
-"""Model retraining and promotion routes — manual approval required."""
+"""Model retraining and promotion routes — gates in PromotionPolicy."""
 
 from fastapi import APIRouter, HTTPException, Query
 
-from agents.learning.model_registry import ModelRegistry
 from agents.learning.retrain_pipeline import RetrainPipeline
+from ml.promotion.promotion_policy import PromotionPolicy
+from ml.registry.model_registry import ModelRegistry
 
 router = APIRouter()
 _registry = ModelRegistry()
 _pipeline = RetrainPipeline()
+_policy = PromotionPolicy()
 
 
 @router.get("")
 def list_models():
     return {
         "production_id": _registry.production_model_id(),
-        "models": _registry.list_models(),
+        "summary": _registry.status_summary(),
+        "models": _registry.list_models_dict(),
     }
+
+
+@router.get("/promotions/audit")
+def promotion_audit(last_n: int = Query(20, ge=1, le=100)):
+    """Last N promotion decisions (auto, manual, rejected)."""
+    return {"records": _policy.get_audit_history(last_n=last_n)}
 
 
 @router.post("/retrain")
 def trigger_retrain(force: bool = Query(False)):
-    """Daily retrain — creates candidate model only, never auto-promotes."""
+    """Daily retrain — evaluates PromotionPolicy; auto-promotes if MODEL_AUTO_PROMOTE=true."""
     return _pipeline.run_scheduled_retrain(force=force)
 
 
@@ -32,6 +41,7 @@ def retrain_status():
         "due_for_retrain": _pipeline.due_for_retrain(),
         "schedule_days": _pipeline.settings.retrain_schedule_days,
         "state": state,
+        "registry": _registry.status_summary(),
     }
 
 
@@ -56,9 +66,22 @@ def approve_model(model_id: str):
 
 @router.post("/{model_id}/promote")
 def promote_model(model_id: str, approved_by: str = Query(...)):
-    """Deploy approved model to production — copies artifact to lightgbm_production.txt."""
+    """Manual production deploy — logged via PromotionPolicy.manual_approve()."""
     try:
         entry = _pipeline.promote_model(model_id, approved_by=approved_by)
-        return {"model": entry, "message": "Promoted to production. Restart API to reload model."}
-    except (KeyError, ValueError, FileNotFoundError) as exc:
+        return {
+            "model": entry,
+            "message": "Promoted to production. Restart API to reload model.",
+        }
+    except (KeyError, ValueError, FileNotFoundError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{model_id}/rollback")
+def rollback_model(model_id: str, rolled_back_by: str = Query(...)):
+    """Rollback production to a prior archived model."""
+    try:
+        entry = _pipeline.rollback_model(model_id, rolled_back_by=rolled_back_by)
+        return {"model": entry, "message": "Rolled back to prior model."}
+    except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

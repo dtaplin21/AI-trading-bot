@@ -45,6 +45,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from ml.promotion.holdout_metrics import holdout_auc
+from ml.promotion.promotion_policy import PromotionPolicy
 from pipeline.world_state_store import WorldStateStore
 from risk.risk_engine import RiskEngine
 
@@ -96,6 +98,7 @@ class LearningAgent:
         self._model_path = model_path
         self._new_samples: int = 0
         self._session_outcomes: list[dict] = []
+        self._promotion = PromotionPolicy()
         OUTCOMES_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         logger.info("LearningAgent initialized | log=%s", OUTCOMES_LOG_PATH)
 
@@ -219,26 +222,52 @@ class LearningAgent:
             current_brier = backtest["current_brier"]
             improvement = current_brier - new_brier
 
+            import numpy as np
+
+            val_preds = np.array(new_model.predict(X_val))
+            holdout_auc_score = holdout_auc(val_preds, y_val)
+            positive_rate = float(np.mean(train_result["y"]))
+
+            model_id = (
+                f"learning_{datetime.now(tz=timezone.utc).strftime('%Y%m%d_%H%M')}"
+            )
+            decision = self._promotion.evaluate(
+                model_id=model_id,
+                n_samples=len(rows),
+                holdout_brier=new_brier,
+                production_brier=current_brier,
+                holdout_auc=holdout_auc_score,
+                positive_rate=positive_rate,
+            )
+
             logger.info(
                 "LearningAgent: retrain done | current_brier=%.4f "
-                "new_brier=%.4f improvement=%.4f | production_model=%s",
+                "new_brier=%.4f improvement=%.4f | gates=%s | by=%s",
                 current_brier,
                 new_brier,
                 improvement,
-                backtest["production_loaded"],
+                "PASS" if all(g.passed for g in decision.gate_results) else "FAIL",
+                decision.promoted_by,
             )
 
-            if improvement >= BRIER_IMPROVEMENT:
+            if decision.approved:
+                self._save_model(
+                    new_model, self._model_path, feature_cols=feature_cols
+                )
+                logger.info(
+                    "LearningAgent: AUTO-PROMOTED to production | model_id=%s",
+                    model_id,
+                )
+            elif decision.promoted_by == "pending_manual":
                 staging_path = self._model_path.replace(
                     "production",
                     f"staging_{datetime.now(tz=timezone.utc).strftime('%Y%m%d_%H%M')}",
                 )
                 self._save_model(new_model, staging_path, feature_cols=feature_cols)
                 logger.info(
-                    "LearningAgent: NEW MODEL STAGED at %s | "
-                    "improvement=%.4f | MANUAL APPROVAL REQUIRED before production",
+                    "LearningAgent: NEW MODEL STAGED at %s — "
+                    "all gates passed; MODEL_AUTO_PROMOTE=false",
                     staging_path,
-                    improvement,
                 )
                 self._write_promotion_request(
                     staging_path,
@@ -246,13 +275,11 @@ class LearningAgent:
                     improvement,
                     len(rows),
                     backtest=backtest,
+                    promotion_decision=decision.to_dict(),
                 )
             else:
                 logger.info(
-                    "LearningAgent: new model did not improve enough "
-                    "(%.4f < %.4f required) — keeping current model",
-                    improvement,
-                    BRIER_IMPROVEMENT,
+                    "LearningAgent: promotion rejected by policy — keeping current model"
                 )
 
             self._new_samples = 0
@@ -420,6 +447,7 @@ class LearningAgent:
                 "brier": brier,
                 "X_val": X_val,
                 "y_val": y_val,
+                "y": y,
                 "feature_cols": feature_cols,
             }
 
@@ -449,6 +477,7 @@ class LearningAgent:
         improvement: float,
         n_samples: int,
         backtest: dict | None = None,
+        promotion_decision: dict | None = None,
     ) -> None:
         """Write a promotion request file for manual review."""
         req = {
@@ -460,11 +489,12 @@ class LearningAgent:
             "paper_days_required": PAPER_DAYS_BEFORE_LIVE,
             "status": "AWAITING_MANUAL_APPROVAL",
             "backtest": backtest or {},
+            "promotion_decision": promotion_decision or {},
             "instructions": (
                 "1. Paper trade this model for 5 sessions. "
-                "2. Review brier score and win rate. "
-                "3. If satisfied, copy to production path and restart. "
-                "4. NEVER auto-promote to live trading."
+                "2. Review promotion gate results in promotion_decision. "
+                "3. POST /models/{id}/promote?approved_by=your_name or set MODEL_AUTO_PROMOTE=true. "
+                "4. Gates must pass on holdout — train metrics are not used."
             ),
         }
         req_path = (
