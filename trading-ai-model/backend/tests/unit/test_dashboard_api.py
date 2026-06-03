@@ -15,7 +15,9 @@ def test_dashboard_overview():
     assert "open_positions" in data
     assert "watched_charts" in data
     assert "active_broker" in data
-    assert len(data["watched_charts"]) >= 1
+    assert len(data["watched_charts"]) == 23
+    assert "watched_charts_grouped" in data
+    assert "watcher_symbol_summary" in data
     assert any(p["id"] == "paper" for p in data["platforms"])
     assert any(p["id"] == "robinhood" for p in data["platforms"])
     assert any(p["name"] == "Tradovate" for p in data["platforms"])

@@ -8,7 +8,11 @@ from typing import Any
 from agents.news_runtime import get_news_agent, get_polling_status
 from config.broker_platforms import build_broker_platforms, primary_execution_broker
 from config.settings import get_settings
-from config.watchlist import DEFAULT_WATCHLIST, parse_watchlist
+from config.watchlist import (
+    charts_grouped_by_asset_class,
+    get_symbol_count,
+    watcher_charts_for_dashboard,
+)
 from data.storage.timescale_store import TimescaleStore
 from paper_trading.position_book import get_position_book
 
@@ -46,15 +50,11 @@ def build_services() -> list[dict[str, Any]]:
 
 
 def build_watched_charts() -> list[dict[str, Any]]:
-    settings = get_settings()
     store = TimescaleStore()
-    charts = parse_watchlist(settings.chart_watchlist)
+    charts = watcher_charts_for_dashboard(include_session_status=True)
 
     rows: list[dict[str, Any]] = []
     for chart in charts:
-        last_bar: datetime | None = None
-        last_price: float | None = None
-
         if store.available:
             try:
                 df = store.load_ohlcv(chart.symbol, chart.timeframe, limit=1)
@@ -62,35 +62,13 @@ def build_watched_charts() -> list[dict[str, Any]]:
                     last_bar = df.index[-1].to_pydatetime()
                     if last_bar.tzinfo is None:
                         last_bar = last_bar.replace(tzinfo=timezone.utc)
-                    last_price = float(df["close"].iloc[-1])
+                    chart.last_bar_at = last_bar.isoformat()
+                    chart.last_price = float(df["close"].iloc[-1])
+                    chart.bar_count = max(chart.bar_count, 1)
             except Exception:
                 pass
 
-        rows.append(
-            {
-                "symbol": chart.symbol,
-                "timeframe": chart.timeframe,
-                "label": chart.label or chart.symbol,
-                "status": "live" if last_bar else "watching",
-                "last_bar_at": last_bar.isoformat() if last_bar else None,
-                "last_price": last_price,
-                "pipeline_active": True,
-            }
-        )
-
-    if not rows:
-        for chart in DEFAULT_WATCHLIST:
-            rows.append(
-                {
-                    "symbol": chart.symbol,
-                    "timeframe": chart.timeframe,
-                    "label": chart.label,
-                    "status": "watching",
-                    "last_bar_at": None,
-                    "last_price": None,
-                    "pipeline_active": True,
-                }
-            )
+        rows.append(chart.to_dict())
 
     return rows
 
@@ -105,10 +83,13 @@ def build_dashboard() -> dict[str, Any]:
     connected = sum(1 for p in platforms if p["status"] == "connected")
     configured = sum(1 for p in platforms if p["status"] == "configured")
     active_broker = primary_execution_broker(settings)
+    watched = build_watched_charts()
 
     return {
         "updated_at": datetime.now(timezone.utc).isoformat(),
-        "execution_mode": "paper" if settings.paper_trading_enabled and active_broker == "paper" else "live",
+        "execution_mode": "paper"
+        if settings.paper_trading_enabled and active_broker == "paper"
+        else "live",
         "active_broker": active_broker,
         "platforms": platforms,
         "platform_summary": {
@@ -119,7 +100,9 @@ def build_dashboard() -> dict[str, Any]:
         "services": build_services(),
         "open_positions": build_open_positions(),
         "open_position_count": len(build_open_positions()),
-        "watched_charts": build_watched_charts(),
-        "watched_chart_count": len(build_watched_charts()),
+        "watched_charts": watched,
+        "watched_chart_count": len(watched),
+        "watched_charts_grouped": charts_grouped_by_asset_class(),
+        "watcher_symbol_summary": get_symbol_count(),
         "news_polling": get_polling_status(),
     }

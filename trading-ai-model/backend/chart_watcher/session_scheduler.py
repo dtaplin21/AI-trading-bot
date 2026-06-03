@@ -18,7 +18,7 @@ from datetime import datetime, time, timedelta
 from enum import Enum
 from zoneinfo import ZoneInfo
 
-from config.symbols import get_symbol_or_none, session_kind
+from config.symbols import SESSION_TYPES, get_symbol_or_none, session_kind
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,13 @@ class SessionScheduler:
         if kind == "equity_us":
             return self._is_equity_session(now_et)
         return True
+
+    def session_label(self, symbol: str) -> str:
+        """Human-readable session schedule for dashboard UI."""
+        kind = session_kind(symbol)
+        if kind and kind in SESSION_TYPES:
+            return SESSION_TYPES[kind]
+        return "Unknown session"
 
     def _is_cme_session(self, now_et: datetime) -> bool:
         weekday = now_et.weekday()

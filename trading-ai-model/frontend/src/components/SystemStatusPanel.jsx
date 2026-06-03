@@ -11,6 +11,7 @@ const STATUS_STYLE = {
   disabled: { bg: "#FAECE7", text: "#993C1D", label: "Disabled" },
   live: { bg: "#EAF3DE", text: "#27500A", label: "Live" },
   watching: { bg: "#FAEEDA", text: "#633806", label: "Watching" },
+  closed: { bg: "#F1EFE8", text: "#5F5E5A", label: "Session closed" },
 };
 
 const CATEGORY_LABEL = {
@@ -188,6 +189,7 @@ function OpenPositionRow({ pos }) {
 }
 
 function ChartRow({ chart }) {
+  const displayName = chart.display_name || chart.label || chart.symbol;
   return (
     <div
       style={{
@@ -204,17 +206,52 @@ function ChartRow({ chart }) {
         <span style={{ marginLeft: 6, fontSize: 12, color: "var(--color-text-tertiary)" }}>{chart.timeframe}</span>
       </div>
       <div>
-        <p style={{ margin: 0, fontSize: 12, color: "var(--color-text-secondary)" }}>
-          {chart.label !== chart.symbol ? chart.label : "Pipeline active"}
-        </p>
+        <p style={{ margin: 0, fontSize: 12, color: "var(--color-text-secondary)" }}>{displayName}</p>
         <p style={{ margin: "2px 0 0", fontSize: 11, color: "var(--color-text-tertiary)" }}>
           Last bar {fmtRelative(chart.last_bar_at)}
+          {chart.session_label ? ` · ${chart.session_label}` : ""}
         </p>
       </div>
       <span style={{ fontSize: 13, fontWeight: 500 }}>{fmtPrice(chart.last_price)}</span>
       <StatusBadge status={chart.status} />
     </div>
   );
+}
+
+function WatchedChartsPanel({ watchedCharts, grouped }) {
+  const groups = grouped && Object.keys(grouped).length > 0 ? grouped : null;
+
+  if (!watchedCharts.length && !groups) {
+    return <p style={{ margin: 0, fontSize: 13, color: "var(--color-text-tertiary)" }}>No charts configured.</p>;
+  }
+
+  if (groups) {
+    return (
+      <>
+        {Object.entries(groups).map(([className, charts]) => (
+          <div key={className} style={{ marginBottom: 12 }}>
+            <p
+              style={{
+                margin: "0 0 6px",
+                fontSize: 11,
+                color: "var(--color-text-tertiary)",
+                letterSpacing: "0.05em",
+              }}
+            >
+              {className.toUpperCase()} ({charts.length})
+            </p>
+            {charts.map((chart) => (
+              <ChartRow key={`${chart.symbol}-${chart.timeframe}`} chart={chart} />
+            ))}
+          </div>
+        ))}
+      </>
+    );
+  }
+
+  return watchedCharts.map((chart) => (
+    <ChartRow key={`${chart.symbol}-${chart.timeframe}`} chart={chart} />
+  ));
 }
 
 export const MOCK_DASHBOARD = {
@@ -372,14 +409,15 @@ export default function SystemStatusPanel({ dashboard, loading = false, onPollin
           </Section>
         </div>
 
-        {/* Watched charts */}
-        <Section title="Charts watching" count={watchedCharts.length}>
-          {watchedCharts.length === 0 ? (
-            <p style={{ margin: 0, fontSize: 13, color: "var(--color-text-tertiary)" }}>No charts configured.</p>
-          ) : (
-            watchedCharts.map((chart) => <ChartRow key={`${chart.symbol}-${chart.timeframe}`} chart={chart} />)
-          )}
-        </Section>
+        {/* Chart watching system — WATCHER_SYMBOLS via API */}
+        <div style={{ gridColumn: "1 / -1" }}>
+          <Section title="Chart watching system" count={watchedCharts.length}>
+            <WatchedChartsPanel
+              watchedCharts={watchedCharts}
+              grouped={data.watched_charts_grouped}
+            />
+          </Section>
+        </div>
 
         {/* Broker platforms */}
         <Section title="Trading platforms" count={platforms.length}>

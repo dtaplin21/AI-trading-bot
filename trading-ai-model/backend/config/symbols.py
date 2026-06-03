@@ -141,6 +141,21 @@ SYMBOLS: dict[str, SymbolSpec] = {
     ),
 }
 
+SYMBOL_MAP: dict[str, SymbolSpec] = SYMBOLS
+
+FUTURES_SYMBOLS: tuple[str, ...] = tuple(
+    s for s, sp in SYMBOLS.items() if sp.asset_class == "futures"
+)
+FOREX_SYMBOLS: tuple[str, ...] = tuple(
+    s for s, sp in SYMBOLS.items() if sp.asset_class == "forex"
+)
+CRYPTO_SYMBOLS: tuple[str, ...] = tuple(
+    s for s, sp in SYMBOLS.items() if sp.asset_class == "crypto"
+)
+EQUITY_SYMBOLS: tuple[str, ...] = tuple(
+    s for s, sp in SYMBOLS.items() if sp.asset_class == "equity"
+)
+
 TICK_VALUES: dict[str, float] = {sym: spec.tick_value for sym, spec in SYMBOLS.items()}
 TICK_SIZES: dict[str, float] = {sym: spec.tick_size for sym, spec in SYMBOLS.items()}
 
@@ -189,7 +204,7 @@ def polygon_ticker_map() -> dict[str, str]:
 
 
 def watcher_symbols_from_env() -> list[str]:
-    raw = os.getenv("WATCHER_SYMBOLS", "")
-    if raw.strip():
-        return [normalize_symbol(s) for s in raw.split(",") if s.strip()]
-    return list(DEFAULT_WATCHER_SYMBOLS)
+    """Delegates to config.watchlist (single source for worker + API)."""
+    from config.watchlist import watcher_symbols_from_env as _from_watchlist
+
+    return _from_watchlist()
