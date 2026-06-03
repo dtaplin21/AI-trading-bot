@@ -4,15 +4,16 @@ from __future__ import annotations
 
 from typing import Optional
 
-from risk.risk_engine import RiskEngine
+from risk.risk_engine import RiskEngine, default_account_size
 
 _engine: Optional[RiskEngine] = None
 
 
-def get_risk_engine(account_size: float = 10_000.0) -> RiskEngine:
+def get_risk_engine(account_size: float | None = None) -> RiskEngine:
     global _engine
     if _engine is None:
-        _engine = RiskEngine(account_size=account_size)
+        size = account_size if account_size is not None else default_account_size()
+        _engine = RiskEngine(account_size=size)
     return _engine
 
 

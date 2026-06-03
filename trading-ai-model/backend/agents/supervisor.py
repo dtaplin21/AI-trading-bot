@@ -25,6 +25,7 @@ from agents.trade_planning_agent import TradePlanningAgent
 from agents.news_runtime import bootstrap_news_sync, get_news_agent
 
 
+from config.execution_config import resolve_execution_mode
 from risk.risk_engine import PortfolioState
 
 
@@ -34,7 +35,7 @@ class TradingSupervisor:
     Ensures all required methods run before decision layer.
     """
 
-    def __init__(self, execution_mode: str = "paper", news_agent=None):
+    def __init__(self, execution_mode: str | None = None, news_agent=None):
         self.news = news_agent or get_news_agent()
         bootstrap_news_sync()
         self.market_data = MarketDataAgent()
@@ -45,7 +46,7 @@ class TradingSupervisor:
         self.prediction = PredictionAgent()
         self.trade_planning = TradePlanningAgent()
         self.risk = RiskAgent(news_agent=self.news)
-        self.execution = ExecutionAgent(mode=execution_mode)
+        self.execution = ExecutionAgent(mode=execution_mode or resolve_execution_mode())
         self.learning = LearningAgent(news_agent=self.news)
         self.audit = AuditAgent(news_agent=self.news)
 

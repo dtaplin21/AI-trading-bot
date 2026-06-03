@@ -38,9 +38,29 @@ ANTHROPIC_API_KEY=
 ANTHROPIC_MODEL=claude-sonnet-4-20250514
 ANTHROPIC_MAX_TOKENS=350
 
-# Paper trading
+# Paper trading (keep true until you are ready for Coinbase live)
 PAPER_TRADING_ENABLED=true
 SIGNAL_LOG_DIR=./logs/signals
+
+# ── Coinbase Advanced Trade (crypto) ─────────────────────────
+# Create CDP API key: https://docs.cdp.coinbase.com/advanced-trade/docs/getting-started
+# Permissions: View + Trade only (no Transfer/Receive)
+COINBASE_API_KEY=
+COINBASE_API_SECRET=
+# Or path to downloaded cdp_api_key.json:
+# COINBASE_API_KEY_FILE=
+# Primary portfolio UUID (optional — uses default portfolio if empty)
+COINBASE_PORTFOLIO_ID=
+# Live orders: requires PAPER_TRADING_ENABLED=false AND coinbase in ENABLED_BROKERS
+COINBASE_LIVE_ENABLED=false
+COINBASE_MAX_ORDER_USD=50
+ENABLED_BROKERS=paper
+
+# ── Risk engine (Coinbase primary account guardrails) ────────
+RISK_ACCOUNT_CAP_USD=500
+RISK_MAX_DAILY_LOSS_USD=30
+RISK_MAX_ORDER_NOTIONAL_USD=50
+RISK_MAX_OPEN_POSITIONS=2
 
 # News intelligence
 NEWS_ENABLED=true

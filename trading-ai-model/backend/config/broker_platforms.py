@@ -52,6 +52,16 @@ BROKER_PLATFORMS: tuple[BrokerPlatform, ...] = (
         detail_disconnected="Set WEBULL_APP_KEY and WEBULL_APP_SECRET in .env",
     ),
     BrokerPlatform(
+        id="coinbase",
+        name="Coinbase",
+        category="retail",
+        asset_classes=("crypto",),
+        website="https://www.coinbase.com",
+        env_flag="coinbase_api_key",
+        detail_connected="Advanced Trade API — crypto spot (live gated)",
+        detail_disconnected="Set COINBASE_API_KEY and COINBASE_API_SECRET; add coinbase to ENABLED_BROKERS",
+    ),
+    BrokerPlatform(
         id="alpaca",
         name="Alpaca",
         category="retail",
@@ -126,6 +136,8 @@ def _has_credentials(settings: Settings, broker: BrokerPlatform) -> bool:
         return bool(settings.robinhood_access_token)
     if broker.id == "webull":
         return bool(settings.webull_app_key and settings.webull_app_secret)
+    if broker.id == "coinbase":
+        return bool(settings.coinbase_api_key and settings.coinbase_api_secret)
     if broker.id == "alpaca":
         return bool(settings.alpaca_api_key and settings.alpaca_secret_key)
     if broker.id == "schwab":
@@ -170,6 +182,9 @@ def build_broker_platforms(settings: Optional[Settings] = None) -> list[dict]:
         account_hint = ""
         if broker.id == "ibkr" and settings.ibkr_account_id:
             account_hint = f" · Acct …{settings.ibkr_account_id[-4:]}" if len(settings.ibkr_account_id) >= 4 else ""
+        elif broker.id == "coinbase" and settings.coinbase_api_key:
+            mode = "Live" if settings.coinbase_live_enabled and not settings.paper_trading_enabled else "Paper / configured"
+            account_hint = f" · {mode}"
         elif broker.id == "alpaca" and settings.alpaca_api_key:
             account_hint = " · " + ("Paper" if settings.alpaca_paper else "Live")
 

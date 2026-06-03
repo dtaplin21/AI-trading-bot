@@ -25,6 +25,8 @@ from typing import Any, Optional
 
 from agents.news_runtime import get_polling_status
 from config.broker_platforms import build_broker_platforms, primary_execution_broker
+from config.execution_config import coinbase_live_allowed, resolve_execution_mode
+from risk.risk_runtime import get_risk_engine
 from config.settings import get_settings
 from config.watchlist import (
     WatchedChart,
@@ -175,9 +177,9 @@ def _build_core_dashboard(watched_objs: list[WatchedChart]) -> dict[str, Any]:
     return {
         "updated_at": now,
         "timestamp": now,
-        "execution_mode": "paper"
-        if settings.paper_trading_enabled and active_broker == "paper"
-        else "live",
+        "execution_mode": resolve_execution_mode(settings),
+        "coinbase_live_ready": coinbase_live_allowed(settings),
+        "risk_limits": get_risk_engine().risk_summary(),
         "active_broker": active_broker,
         "platforms": platforms,
         "platform_summary": {

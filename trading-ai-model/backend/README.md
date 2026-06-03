@@ -46,6 +46,27 @@ python scripts/run_scheduled_retrain.py   # cron: daily, e.g. 0 2 * * *
 
 Set `LLM_ENABLED=true` and `ANTHROPIC_API_KEY=...` in `.env`. Anthropic is used for news sentiment and audit explanations only — it never executes trades.
 
+### Coinbase (crypto execution)
+
+Paper trading is the default. Coinbase Advanced Trade is wired for **crypto only** (BTCUSD, ETHUSD, etc.) with dollar risk caps.
+
+1. Copy risk/Coinbase vars from `gi.example` into `.env`.
+2. Create a [CDP API key](https://docs.cdp.coinbase.com/advanced-trade/docs/getting-started) with **View + Trade** only.
+3. Keep `PAPER_TRADING_ENABLED=true` while testing.
+4. When ready for live crypto on your primary account:
+
+```bash
+PAPER_TRADING_ENABLED=false
+COINBASE_LIVE_ENABLED=true
+ENABLED_BROKERS=coinbase
+COINBASE_API_KEY=organizations/.../apiKeys/...
+COINBASE_API_SECRET="-----BEGIN EC PRIVATE KEY-----\n...\n-----END EC PRIVATE KEY-----\n"
+RISK_ACCOUNT_CAP_USD=500
+RISK_MAX_DAILY_LOSS_USD=30
+```
+
+Live orders require all four gates: paper off, `COINBASE_LIVE_ENABLED`, credentials, and `coinbase` in `ENABLED_BROKERS`.
+
 ## Constraint Rules
 
 - **Gann**: research-only; modifies SignalRank ± only; 300+ samples + random baseline required

@@ -1,5 +1,6 @@
 """Live trading — market data adapters and execution (future)."""
 
+from live.coinbase_executor import CoinbaseExecutor, get_coinbase_executor
 from live.broker_adapter import (
     BrokerAdapter,
     PolygonBrokerAdapter,
@@ -14,4 +15,6 @@ __all__ = [
     "get_broker_adapter",
     "default_worker_broker",
     "register_broker_adapter",
+    "CoinbaseExecutor",
+    "get_coinbase_executor",
 ]

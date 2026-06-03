@@ -50,7 +50,15 @@ class Settings(BaseSettings):
     signal_log_dir: str = "./logs/signals"
     chart_watchlist: str = "MES:5m,ES:5m,NQ:5m,MNQ:5m"
 
-    # Broker / trading platforms (comma-separated ids: paper,robinhood,alpaca,ibkr,tradovate,...)
+    # Coinbase Advanced Trade (crypto execution — live gated separately)
+    coinbase_api_key: str = ""
+    coinbase_api_secret: str = ""
+    coinbase_api_key_file: str = ""
+    coinbase_portfolio_id: str = ""
+    coinbase_live_enabled: bool = False
+    coinbase_max_order_usd: float = 50.0
+
+    # Broker / trading platforms (comma-separated ids: paper,coinbase,robinhood,alpaca,...)
     enabled_brokers: str = "paper"
 
     robinhood_access_token: str = ""

@@ -39,6 +39,9 @@ hmmlearn>=0.3.0        # Hidden Markov Model (Markov agent)
 # ── Experiment tracking ───────────────────────────────────────
 mlflow>=2.11.0
 
+# ── Execution (Coinbase Advanced Trade) ───────────────────────
+coinbase-advanced-py>=1.8.0
+
 # ── Market data ───────────────────────────────────────────────
 # pandas-ta: pip install -r requirements-ta.txt  (or pip install -e ".[ta]")
 python-dotenv>=1.0.0   # .env loading
