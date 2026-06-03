@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS model_registry (
 
 NEWS_EVENTS_DDL = """
 CREATE TABLE IF NOT EXISTS news_events (
-    id               TEXT PRIMARY KEY,
+    id               TEXT NOT NULL,
     source           TEXT NOT NULL,
     headline         TEXT NOT NULL,
     summary          TEXT,
@@ -87,7 +87,8 @@ CREATE TABLE IF NOT EXISTS news_events (
     explanation      TEXT,
     symbols_affected TEXT[],
     asset_classes    TEXT[],
-    raw_payload      JSONB NOT NULL DEFAULT '{}'
+    raw_payload      JSONB NOT NULL DEFAULT '{}',
+    PRIMARY KEY (id, published_at)
 );
 """
 
@@ -371,7 +372,7 @@ class TimescaleStore:
             ) VALUES (
                 %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb
             )
-            ON CONFLICT (id) DO NOTHING
+            ON CONFLICT (id, published_at) DO NOTHING
         """
         rows = [news_event_insert_row(e) for e in events]
         with self._connect() as conn:

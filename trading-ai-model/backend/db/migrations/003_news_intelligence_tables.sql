@@ -8,7 +8,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 -- ── 1. news_events ─────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS news_events (
-    id               TEXT PRIMARY KEY,
+    id               TEXT NOT NULL,
     source           VARCHAR(64)   NOT NULL,
     headline         TEXT          NOT NULL,
     summary          TEXT,
@@ -28,8 +28,26 @@ CREATE TABLE IF NOT EXISTS news_events (
     explanation      TEXT,
     symbols_affected TEXT[],
     asset_classes    TEXT[],
-    raw_payload      JSONB         NOT NULL DEFAULT '{}'
+    raw_payload      JSONB         NOT NULL DEFAULT '{}',
+    PRIMARY KEY (id, published_at)
 );
+
+-- Timescale hypertable requires partition column in PK (upgrade legacy id-only PK)
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'news_events'
+    ) AND NOT EXISTS (
+        SELECT 1 FROM pg_constraint c
+        JOIN pg_class rel ON rel.oid = c.conrelid
+        WHERE rel.relname = 'news_events' AND c.contype = 'p'
+          AND pg_get_constraintdef(c.oid) LIKE '%published_at%'
+    ) THEN
+        ALTER TABLE news_events DROP CONSTRAINT IF EXISTS news_events_pkey;
+        ALTER TABLE news_events ADD PRIMARY KEY (id, published_at);
+    END IF;
+END $$;
 
 -- Upgrade legacy news_events (TEXT id / JSONB symbols) when present
 DO $$
@@ -111,7 +129,7 @@ CREATE INDEX IF NOT EXISTS idx_sym_impact_direction
 -- ── 4. news_sentiment_scores ───────────────────────────────
 
 CREATE TABLE IF NOT EXISTS news_sentiment_scores (
-    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id                  UUID NOT NULL DEFAULT gen_random_uuid(),
     symbol              VARCHAR(16)   NOT NULL,
     window_minutes      INTEGER       NOT NULL,
     computed_at         TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
@@ -122,8 +140,25 @@ CREATE TABLE IF NOT EXISTS news_sentiment_scores (
     event_count         INTEGER       NOT NULL DEFAULT 0,
     high_impact_count   INTEGER       NOT NULL DEFAULT 0,
     dominant_sentiment  VARCHAR(16),
-    dominant_event_type VARCHAR(64)
+    dominant_event_type VARCHAR(64),
+    PRIMARY KEY (id, computed_at)
 );
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'news_sentiment_scores'
+    ) AND NOT EXISTS (
+        SELECT 1 FROM pg_constraint c
+        JOIN pg_class rel ON rel.oid = c.conrelid
+        WHERE rel.relname = 'news_sentiment_scores' AND c.contype = 'p'
+          AND pg_get_constraintdef(c.oid) LIKE '%computed_at%'
+    ) THEN
+        ALTER TABLE news_sentiment_scores DROP CONSTRAINT IF EXISTS news_sentiment_scores_pkey;
+        ALTER TABLE news_sentiment_scores ADD PRIMARY KEY (id, computed_at);
+    END IF;
+END $$;
 
 SELECT create_hypertable('news_sentiment_scores', 'computed_at', if_not_exists => TRUE);
 
@@ -159,7 +194,7 @@ CREATE INDEX IF NOT EXISTS idx_risk_windows_symbols
 -- ── 6. news_feature_snapshots ──────────────────────────────
 
 CREATE TABLE IF NOT EXISTS news_feature_snapshots (
-    id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id                       UUID NOT NULL DEFAULT gen_random_uuid(),
     signal_id                UUID,
     symbol                   VARCHAR(16)   NOT NULL,
     timeframe                VARCHAR(8)    NOT NULL,
@@ -180,8 +215,25 @@ CREATE TABLE IF NOT EXISTS news_feature_snapshots (
     news_risk_reason         TEXT,
     latest_headline          TEXT,
     latest_event_type        VARCHAR(64),
-    latest_sentiment_label   VARCHAR(16)
+    latest_sentiment_label   VARCHAR(16),
+    PRIMARY KEY (id, snapshot_at)
 );
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'news_feature_snapshots'
+    ) AND NOT EXISTS (
+        SELECT 1 FROM pg_constraint c
+        JOIN pg_class rel ON rel.oid = c.conrelid
+        WHERE rel.relname = 'news_feature_snapshots' AND c.contype = 'p'
+          AND pg_get_constraintdef(c.oid) LIKE '%snapshot_at%'
+    ) THEN
+        ALTER TABLE news_feature_snapshots DROP CONSTRAINT IF EXISTS news_feature_snapshots_pkey;
+        ALTER TABLE news_feature_snapshots ADD PRIMARY KEY (id, snapshot_at);
+    END IF;
+END $$;
 
 SELECT create_hypertable('news_feature_snapshots', 'snapshot_at', if_not_exists => TRUE);
 
