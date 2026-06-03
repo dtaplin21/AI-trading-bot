@@ -26,6 +26,10 @@ cp .env.example .env   # DATABASE_URL=postgresql://trading:trading@localhost:543
 pip install -e ".[storage]"
 ```
 
+On first start (and each deploy with new SQL files), `main.py` runs pending
+`db/migrations/*.sql` automatically (`schema_migrations` tracks applied files).
+Manual run: `python scripts/run_migrations.py`.
+
 Candles are stored automatically by the Market Data Agent on each pipeline run.
 
 ### Model retraining (daily schedule, manual promotion)

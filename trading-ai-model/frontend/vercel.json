@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://ai-trading-app-m22o.onrender.com/:path*"
+    }
+  ]
+}

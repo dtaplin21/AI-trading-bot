@@ -101,7 +101,7 @@ async def start_api() -> None:
     config = uvicorn.Config(
         "api.main:app",
         host=os.getenv("API_HOST", "0.0.0.0"),
-        port=int(os.getenv("API_PORT", "8000")),
+        port=int(os.getenv("PORT", os.getenv("API_PORT", "8000"))),
         reload=os.getenv("API_RELOAD", "false").lower() == "true",
         log_level="info",
     )
@@ -218,6 +218,19 @@ def main() -> None:
         default="dev",
     )
     args = parser.parse_args()
+
+    from data.storage.migrate import run_migrations
+
+    try:
+        applied = run_migrations()
+        if applied:
+            print(f"Database: applied {applied} migration(s)")
+    except Exception as exc:
+        if args.mode == "dev":
+            print(f"Warning: database migrations skipped ({exc})")
+        else:
+            print(f"Database migrations failed: {exc}", file=sys.stderr)
+            sys.exit(1)
 
     if args.mode == "dev":
         start_dev()

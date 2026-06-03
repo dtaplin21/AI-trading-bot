@@ -3,6 +3,7 @@ APP_ENV=development
 LOG_LEVEL=INFO
 API_HOST=0.0.0.0
 API_PORT=8000
+CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 
 # TimescaleDB / Postgres
 # docker compose up -d  →  postgresql://trading:trading@localhost:5432/trading_ai

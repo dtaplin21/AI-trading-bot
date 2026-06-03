@@ -11,6 +11,7 @@ from typing import Any, Generator, Optional
 import pandas as pd
 
 from config.settings import get_settings
+from data.storage.migrate import split_sql
 from data.storage.news_repository import (
     NEWS_EVENTS_V2_COLUMNS,
     NEWS_TABLES_DDL,
@@ -207,7 +208,8 @@ class TimescaleStore:
                     cur.execute(CONFLUENCE_OUTCOMES_DDL)
                     cur.execute(PLANNER_AUDITS_DDL)
                     cur.execute(CALENDAR_SCHEDULE_DDL)
-                    cur.execute(NEWS_TABLES_DDL)
+                    for stmt in split_sql(NEWS_TABLES_DDL):
+                        cur.execute(stmt)
                     try:
                         cur.execute(NEWS_EVENTS_V2_COLUMNS)
                     except Exception:
