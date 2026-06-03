@@ -9,6 +9,7 @@
     "dev:web": "cd frontend && npm run dev",
     "dev:watch": "cd backend && python main.py --mode watch",
     "dev:worker": "cd backend && python main.py --mode worker",
+    "backfill:polygon": "cd backend && python scripts/backfill_polygon.py --export-csv",
     "install:frontend": "cd frontend && npm install"
   }
 }

@@ -1,6 +1,7 @@
 # Local overrides
 data/cache/
 data/parquet/
+data/backfill_checkpoint.json
 *.parquet
 mlruns/
 experiments/

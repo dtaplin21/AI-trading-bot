@@ -12,6 +12,7 @@ import pandas as pd
 
 from config.settings import get_settings
 from data.storage.migrate import split_sql
+from data.storage.pg_connect import connect_psycopg2
 from data.storage.news_repository import (
     NEWS_EVENTS_V2_COLUMNS,
     NEWS_TABLES_DDL,
@@ -237,9 +238,7 @@ class TimescaleStore:
 
     @contextmanager
     def _connect(self) -> Generator[Any, None, None]:
-        import psycopg2  # noqa: PLC0415
-
-        conn = psycopg2.connect(self.database_url)
+        conn = connect_psycopg2(self.database_url)
         try:
             yield conn
         finally:

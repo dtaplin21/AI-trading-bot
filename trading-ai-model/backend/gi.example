@@ -8,6 +8,10 @@ CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 # TimescaleDB / Postgres
 # docker compose up -d  →  postgresql://trading:trading@localhost:5432/trading_ai
 DATABASE_URL=postgresql://trading:trading@localhost:5432/trading_ai
+# Remote Render: append ?sslmode=require — sslrootcert uses certifi automatically
+
+# Polygon backfill — futures use contract codes (MESH25, …) for BACKFILL year
+# BACKFILL_FUTURES_YEAR=2025
 
 # Data sources
 MARKET_DATA_PROVIDER=
@@ -37,6 +41,13 @@ LLM_ENABLED=false
 ANTHROPIC_API_KEY=
 ANTHROPIC_MODEL=claude-sonnet-4-20250514
 ANTHROPIC_MAX_TOKENS=350
+
+# Polygon backfill (run once before replay): python scripts/backfill_polygon.py --export-csv
+# BACKFILL_START=2025-01-01
+# BACKFILL_END=2025-12-31
+# BACKFILL_TIMEFRAME=1m
+# BACKFILL_EXPORT_CSV=true
+POLYGON_API_KEY=
 
 # Paper trading (keep true until you are ready for Coinbase live)
 PAPER_TRADING_ENABLED=true

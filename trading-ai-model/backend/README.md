@@ -18,6 +18,21 @@ pytest
 uvicorn api.main:app --reload
 ```
 
+### Polygon historical backfill (before replay)
+
+Replay reads bars from **TimescaleDB** or `data/ohlcv/*.csv` — it does not call Polygon. Backfill first:
+
+```bash
+cd backend
+source .venv/bin/activate
+# Uses WATCHER_SYMBOLS, WATCHER_REPLAY_START/END from .env
+python scripts/backfill_polygon.py --export-csv
+```
+
+Then set `WATCHER_MODE=replay` on the worker and redeploy.
+
+Options: `--symbols MES,BTCUSD --start 2025-01-01 --end 2025-12-31 --timeframe 1m`
+
 ### TimescaleDB
 
 ```bash

@@ -1,8 +1,16 @@
 """Global config, env vars, and constants."""
 
+import logging
 from functools import lru_cache
-
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from config.env_resolve import env_var_from_file, is_env_placeholder
+from data.storage.pg_connect import is_database_url_placeholder
+
+logger = logging.getLogger(__name__)
+
+_BACKEND_DIR = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
@@ -104,6 +112,25 @@ class Settings(BaseSettings):
     eia_api_key: str = ""
 
 
+def _apply_env_file_fallbacks(settings: Settings) -> Settings:
+    updates: dict[str, str] = {}
+    if is_database_url_placeholder(settings.database_url):
+        fallback = env_var_from_file("DATABASE_URL", _BACKEND_DIR)
+        if fallback:
+            updates["database_url"] = fallback
+    if is_env_placeholder(settings.polygon_api_key):
+        fallback = env_var_from_file("POLYGON_API_KEY", _BACKEND_DIR)
+        if fallback:
+            updates["polygon_api_key"] = fallback
+    if updates:
+        logger.warning(
+            "Ignoring placeholder env vars (%s); using backend/.env",
+            ", ".join(k.upper() for k in updates),
+        )
+        return settings.model_copy(update=updates)
+    return settings
+
+
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    return _apply_env_file_fallbacks(Settings())

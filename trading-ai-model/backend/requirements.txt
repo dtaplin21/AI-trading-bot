@@ -18,6 +18,7 @@ pydantic-settings>=2.2.0
 # ── Database ──────────────────────────────────────────────────
 asyncpg>=0.29.0        # Async Postgres / TimescaleDB
 psycopg2-binary>=2.9.0 # Sync Postgres (TimescaleStore)
+certifi>=2024.2.2      # CA bundle for Render Postgres SSL from macOS
 sqlalchemy>=2.0.0      # ORM layer
 alembic>=1.13.0        # Migrations
 

@@ -101,8 +101,9 @@ def run_migrations(database_url: str | None = None) -> int:
         logger.info("run_migrations: DATABASE_URL unset — skipping")
         return 0
 
-    import psycopg2
     from psycopg2 import Error as PsycopgError
+
+    from data.storage.pg_connect import connect_psycopg2
 
     applied = 0
     files = sorted(MIGRATIONS_DIR.glob("*.sql"))
@@ -110,7 +111,7 @@ def run_migrations(database_url: str | None = None) -> int:
         logger.warning("run_migrations: no files in %s", MIGRATIONS_DIR)
         return 0
 
-    with psycopg2.connect(url) as conn:
+    with connect_psycopg2(url) as conn:
         conn.autocommit = True
         with conn.cursor() as cur:
             _ensure_migrations_table(cur)
