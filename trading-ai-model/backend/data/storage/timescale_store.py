@@ -335,6 +335,19 @@ class TimescaleStore:
         t = row[0]
         return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
 
+    def count_bars(self, symbol: str, timeframe: str = "5m") -> int:
+        if not self._available:
+            return 0
+        sql = """
+            SELECT COUNT(*) FROM ohlcv_candles
+            WHERE symbol = %s AND timeframe = %s
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (symbol.upper(), timeframe))
+                row = cur.fetchone()
+        return int(row[0]) if row else 0
+
     def insert_observation(self, symbol: str, timeframe: str, signal_rank: int, payload: dict) -> None:
         if not self._available:
             return
