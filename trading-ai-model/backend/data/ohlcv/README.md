@@ -25,6 +25,9 @@ Accepted timestamp formats:
 Symbols: MES, NQ, CL, GC, ZB, RTY  
 (add any symbol matching `WATCHER_SYMBOLS` in `.env`)
 
-If no file is found, the system generates 500 synthetic bars for development/testing only.
+**Replay / paper data priority:**
+
+1. `{SYMBOL}_1m.csv` or `{SYMBOL}_1m.jsonl` in this folder  
+2. TimescaleDB `ohlcv_candles` (requires `DATABASE_URL`; set `WATCHER_REPLAY_TIMEFRAME`, default `1m`)
 
 Default path: `data/ohlcv` (override with `WATCHER_DATA_PATH` in `.env`).

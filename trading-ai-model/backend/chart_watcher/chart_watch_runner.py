@@ -17,6 +17,8 @@ Env vars:
   WATCHER_REPLAY_END     ISO date for replay end,   e.g. 2025-12-31
   WATCHER_REPLAY_SPEED   float multiplier, 1.0=realtime, 100=fast (replay only)
   WATCHER_DATA_PATH      path to CSV/JSONL files for paper/replay mode
+  WATCHER_REPLAY_TIMEFRAME  bar timeframe for DB replay (default 1m)
+  WATCHER_REPLAY_DB_LIMIT   max bars per symbol from Timescale (default 500000)
   WATCHER_BAR_INTERVAL   seconds between candle polls in live mode (default 60)
   WATCHER_LOG_BARS       true|false — log every bar received (default false)
 """
@@ -29,7 +31,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import AsyncIterator, Optional, Union
+from typing import AsyncIterator, Optional, Union, cast
 
 import pandas as pd
 
@@ -40,6 +42,7 @@ from chart_watcher.session_scheduler import SessionScheduler, WatcherMode
 from config.watchlist import watcher_symbols_from_env, watcher_timeframes_from_env
 from pipeline.feature_fusion_news_patch import NewsAgentProtocol
 from pipeline.schemas import OHLCV
+from data.storage.timescale_store import TimescaleStore
 from pipeline.trading_supervisor import TradingPipelineSupervisor
 
 logger = logging.getLogger(__name__)
@@ -51,7 +54,45 @@ LOG_BARS = os.getenv("WATCHER_LOG_BARS", "false").lower() == "true"
 BAR_INTERVAL = int(os.getenv("WATCHER_BAR_INTERVAL", "60"))
 REPLAY_SPEED = float(os.getenv("WATCHER_REPLAY_SPEED", "100.0"))
 DATA_PATH = Path(os.getenv("WATCHER_DATA_PATH", "data/ohlcv"))
+REPLAY_TIMEFRAME = os.getenv("WATCHER_REPLAY_TIMEFRAME", "1m")
+REPLAY_DB_LIMIT = int(os.getenv("WATCHER_REPLAY_DB_LIMIT", "500000"))
 MIN_OHLCV_BARS = 20
+
+
+def _dataframe_float(value: object, default: float = 0.0) -> float:
+    """Coerce a DataFrame cell to float (handles None/NaN for type checkers)."""
+    if value is None:
+        return default
+    if isinstance(value, float) and pd.isna(value):
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        return float(value)
+    return default
+
+
+def _coerce_index_timestamp(ts_val: object) -> datetime | None:
+    """Convert a DataFrame index value to UTC datetime; skip NaT/invalid."""
+    if ts_val is pd.NaT:
+        return None
+    if isinstance(ts_val, pd.Timestamp):
+        dt = ts_val.to_pydatetime()
+    elif isinstance(ts_val, datetime):
+        dt = ts_val
+    else:
+        try:
+            parsed = pd.Timestamp(str(ts_val))
+        except (ValueError, TypeError):
+            return None
+        if parsed is pd.NaT:
+            return None
+        dt = parsed.to_pydatetime()
+    if dt is pd.NaT or not isinstance(dt, datetime):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return cast(datetime, dt)
 
 
 def _parse_bar_timestamp(ts_raw: object) -> datetime:
@@ -98,6 +139,7 @@ class ChartWatchRunner:
         self._started_at: Optional[datetime] = None
         self._last_live_bar_ts: dict[str, datetime] = {}
         self._broker_adapter = None
+        self._timescale: TimescaleStore | None = None
 
         logger.info(
             "ChartWatchRunner: mode=%s | symbols=%s | timeframes=%s",
@@ -166,23 +208,29 @@ class ChartWatchRunner:
         tasks = [self._process_symbol_file(sym) for sym in SYMBOLS]
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def _process_symbol_file(self, symbol: str) -> None:
-        csv_path = DATA_PATH / f"{symbol}_1m.csv"
-        jsonl_path = DATA_PATH / f"{symbol}_1m.jsonl"
+    def _store(self) -> TimescaleStore:
+        if self._timescale is None:
+            self._timescale = TimescaleStore()
+        return self._timescale
 
-        if csv_path.exists():
-            async for bar in self._read_csv(symbol, csv_path):
-                await self._route_bar(bar)
-        elif jsonl_path.exists():
-            async for bar in self._read_jsonl(symbol, jsonl_path):
-                await self._route_bar(bar)
-        else:
-            logger.warning(
-                "ChartWatchRunner[%s]: no data file found at %s",
-                symbol,
-                DATA_PATH,
-            )
-            await self._generate_dummy_bars(symbol)
+    async def _process_symbol_file(self, symbol: str) -> None:
+        count = 0
+        async for bar in self._symbol_bar_source(symbol):
+            await self._route_bar(bar)
+            count += 1
+        if count == 0:
+            self._log_missing_data(symbol, context="paper")
+
+    def _log_missing_data(self, symbol: str, *, context: str) -> None:
+        logger.error(
+            "ChartWatchRunner[%s]: no OHLCV for %s mode — "
+            "add %s/%s_1m.csv|.jsonl or ingest bars into Timescale (timeframe=%s).",
+            symbol,
+            context,
+            DATA_PATH,
+            symbol,
+            REPLAY_TIMEFRAME,
+        )
 
     async def _read_csv(self, symbol: str, path: Path) -> AsyncIterator[OHLCV]:
         with open(path, "r") as f:
@@ -235,51 +283,6 @@ class ChartWatchRunner:
                 except (json.JSONDecodeError, KeyError, ValueError) as e:
                     logger.debug("ChartWatchRunner JSONL parse error: %s", e)
 
-    async def _generate_dummy_bars(self, symbol: str) -> None:
-        import random
-
-        logger.warning(
-            "ChartWatchRunner[%s]: generating 500 synthetic bars for dev/test",
-            symbol,
-        )
-        base_prices = {
-            "MES": 5400.0,
-            "ES": 5400.0,
-            "NQ": 19200.0,
-            "MNQ": 19200.0,
-            "CL": 78.50,
-            "GC": 2350.0,
-            "ZB": 115.0,
-            "RTY": 2100.0,
-        }
-        price = base_prices.get(symbol, 5000.0)
-        ts = datetime(2025, 1, 6, 14, 30, tzinfo=timezone.utc)
-
-        for _ in range(500):
-            if not self._running:
-                return
-            change = random.gauss(0, price * 0.001)
-            open_ = price
-            close_ = price + change
-            high_ = max(open_, close_) + abs(random.gauss(0, price * 0.0005))
-            low_ = min(open_, close_) - abs(random.gauss(0, price * 0.0005))
-            vol = random.randint(100, 2000)
-            price = close_
-
-            bar = OHLCV(
-                symbol=symbol,
-                timeframe="1m",
-                timestamp=ts,
-                open=round(open_, 2),
-                high=round(high_, 2),
-                low=round(low_, 2),
-                close=round(close_, 2),
-                volume=float(vol),
-            )
-            await self._route_bar(bar)
-            ts += timedelta(minutes=1)
-            await asyncio.sleep(0)
-
     async def _run_replay(self) -> None:
         start_str = os.getenv("WATCHER_REPLAY_START", "2025-01-01")
         end_str = os.getenv("WATCHER_REPLAY_END", "2025-12-31")
@@ -293,13 +296,32 @@ class ChartWatchRunner:
             REPLAY_SPEED,
         )
 
+        logger.info(
+            "ChartWatchRunner: REPLAY sources | data_path=%s | db=%s | timeframe=%s",
+            DATA_PATH,
+            self._store().available,
+            REPLAY_TIMEFRAME,
+        )
+
         all_bars: list[OHLCV] = []
         for sym in SYMBOLS:
             bars = await self._load_all_bars(sym, start_dt, end_dt)
+            if not bars:
+                self._log_missing_data(sym, context="replay")
             all_bars.extend(bars)
 
         all_bars.sort(key=lambda b: b.timestamp)
         logger.info("ChartWatchRunner: replay loaded %d bars total", len(all_bars))
+
+        if not all_bars:
+            logger.error(
+                "ChartWatchRunner: replay aborted — 0 bars in [%s, %s]. "
+                "Provide files under %s or OHLCV in Timescale.",
+                start_str,
+                end_str,
+                DATA_PATH,
+            )
+            return
 
         for bar in all_bars:
             if not self._running:
@@ -318,20 +340,103 @@ class ChartWatchRunner:
         self, symbol: str, start: datetime, end: datetime
     ) -> list[OHLCV]:
         bars: list[OHLCV] = []
-        async for bar in self._symbol_bar_source(symbol):
-            if start <= bar.timestamp <= end:
+        async for bar in self._symbol_bar_source(symbol, start=start, end=end):
+            ts = bar.timestamp if bar.timestamp.tzinfo else bar.timestamp.replace(tzinfo=timezone.utc)
+            if start <= ts <= end:
                 bars.append(bar)
+        if bars:
+            logger.info("ChartWatchRunner[%s]: replay window has %d bars", symbol, len(bars))
         return bars
 
-    async def _symbol_bar_source(self, symbol: str) -> AsyncIterator[OHLCV]:
+    def _bars_from_dataframe(self, symbol: str, df: pd.DataFrame) -> list[OHLCV]:
+        if df.empty:
+            return []
+        bars: list[OHLCV] = []
+        has_volume = "volume" in df.columns
+        for i in range(len(df)):
+            row = df.iloc[i]
+            t = _coerce_index_timestamp(df.index[i])
+            if t is None:
+                continue
+            bars.append(
+                OHLCV(
+                    symbol=symbol,
+                    timeframe=REPLAY_TIMEFRAME,
+                    timestamp=t,
+                    open=_dataframe_float(row["open"]),
+                    high=_dataframe_float(row["high"]),
+                    low=_dataframe_float(row["low"]),
+                    close=_dataframe_float(row["close"]),
+                    volume=_dataframe_float(row["volume"]) if has_volume else 0.0,
+                ),
+            )
+        return bars
+
+    async def _iter_db_bars(
+        self,
+        symbol: str,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> AsyncIterator[OHLCV]:
+        store = self._store()
+        if not store.available:
+            return
+
+        if start is not None and end is not None:
+            df = store.load_ohlcv_range(
+                symbol,
+                REPLAY_TIMEFRAME,
+                start,
+                end,
+                limit=REPLAY_DB_LIMIT,
+            )
+            source = f"Timescale range [{start.isoformat()}, {end.isoformat()}]"
+        else:
+            df = store.load_ohlcv(
+                symbol,
+                REPLAY_TIMEFRAME,
+                limit=min(REPLAY_DB_LIMIT, 50_000),
+            )
+            source = "Timescale (recent)"
+
+        if df.empty:
+            return
+
+        logger.info(
+            "ChartWatchRunner[%s]: %d bars from %s (timeframe=%s)",
+            symbol,
+            len(df),
+            source,
+            REPLAY_TIMEFRAME,
+        )
+        for bar in self._bars_from_dataframe(symbol, df):
+            yield bar
+            await asyncio.sleep(0)
+
+    async def _symbol_bar_source(
+        self,
+        symbol: str,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> AsyncIterator[OHLCV]:
+        """CSV → JSONL → TimescaleDB."""
         csv_path = DATA_PATH / f"{symbol}_1m.csv"
         jsonl_path = DATA_PATH / f"{symbol}_1m.jsonl"
         if csv_path.exists():
+            logger.info("ChartWatchRunner[%s]: loading %s", symbol, csv_path)
             async for bar in self._read_csv(symbol, csv_path):
                 yield bar
-        elif jsonl_path.exists():
+            return
+        if jsonl_path.exists():
+            logger.info("ChartWatchRunner[%s]: loading %s", symbol, jsonl_path)
             async for bar in self._read_jsonl(symbol, jsonl_path):
                 yield bar
+            return
+
+        async for bar in self._iter_db_bars(symbol, start=start, end=end):
+            yield bar
 
     async def _run_live(self) -> None:
         from live.broker_adapter import get_broker_adapter

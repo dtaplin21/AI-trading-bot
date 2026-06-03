@@ -318,6 +318,36 @@ class TimescaleStore:
         df = df.sort_values("time").set_index("time")
         return df[["open", "high", "low", "close", "volume"]]
 
+    def load_ohlcv_range(
+        self,
+        symbol: str,
+        timeframe: str,
+        start: datetime,
+        end: datetime,
+        limit: int = 500_000,
+    ) -> pd.DataFrame:
+        """Load OHLCV in [start, end] ascending — for chart watcher replay."""
+        if not self._available:
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+        start_t = start if start.tzinfo else start.replace(tzinfo=timezone.utc)
+        end_t = end if end.tzinfo else end.replace(tzinfo=timezone.utc)
+
+        sql = """
+            SELECT time, open, high, low, close, volume
+            FROM ohlcv_candles
+            WHERE symbol = %s AND timeframe = %s
+              AND time >= %s AND time <= %s
+            ORDER BY time ASC
+            LIMIT %s
+        """
+        params = (symbol.upper(), timeframe, start_t, end_t, limit)
+        with self._connect() as conn:
+            df = pd.read_sql(sql, conn, params=params)
+        if df.empty:
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        return df.set_index("time")[["open", "high", "low", "close", "volume"]]
+
     def latest_bar_time(self, symbol: str, timeframe: str = "5m") -> Optional[datetime]:
         if not self._available:
             return None

@@ -366,11 +366,29 @@ export default function SystemStatusPanel({ dashboard, loading = false, onPollin
       >
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", flex: 1 }}>
           <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
+            Mode:{" "}
+            <strong style={{ color: "var(--color-text-primary)" }}>
+              {data.execution_mode || "paper"}
+            </strong>
+          </span>
+          <span style={{ color: "var(--color-border-tertiary)" }}>|</span>
+          <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
             Active:{" "}
             <strong style={{ color: "var(--color-text-primary)" }}>
               {platforms.find((p) => p.id === data.active_broker)?.name || data.active_broker || "—"}
             </strong>
           </span>
+          {data.risk_limits?.account_cap_usd != null && (
+            <>
+              <span style={{ color: "var(--color-border-tertiary)" }}>|</span>
+              <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
+                Risk cap:{" "}
+                <strong>${data.risk_limits.account_cap_usd}</strong>
+                {" · "}
+                daily stop ${data.risk_limits.max_daily_loss_usd}
+              </span>
+            </>
+          )}
           <span style={{ color: "var(--color-border-tertiary)" }}>|</span>
           <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
             <strong style={{ color: "#27500A" }}>{summary.connected ?? 0}</strong> connected

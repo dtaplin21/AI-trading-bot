@@ -180,3 +180,59 @@ def test_parse_bar_timestamp_iso_and_epoch():
     assert iso.year == 2025 and iso.hour == 14
     epoch = _parse_bar_timestamp(1_705_000_000)
     assert epoch.tzinfo is not None
+
+
+@pytest.mark.asyncio
+async def test_symbol_bar_source_prefers_csv(tmp_path, monkeypatch):
+    monkeypatch.setenv("WATCHER_DATA_PATH", str(tmp_path))
+    csv_path = tmp_path / "MES_1m.csv"
+    csv_path.write_text(
+        "timestamp,open,high,low,close,volume\n"
+        "2025-01-06T14:30:00Z,100,101,99,100.5,500\n"
+    )
+
+    from chart_watcher import chart_watch_runner as cwr
+
+    cwr.DATA_PATH = tmp_path
+    runner = cwr.ChartWatchRunner()
+    runner._running = True
+    bars = [b async for b in runner._symbol_bar_source("MES")]
+    assert len(bars) == 1
+    assert bars[0].close == 100.5
+
+
+@pytest.mark.asyncio
+async def test_symbol_bar_source_db_fallback(tmp_path, monkeypatch):
+    monkeypatch.setenv("WATCHER_DATA_PATH", str(tmp_path))
+
+    import pandas as pd
+
+    from chart_watcher import chart_watch_runner as cwr
+
+    cwr.DATA_PATH = tmp_path
+
+    class FakeStore:
+        available = True
+
+        def load_ohlcv_range(self, symbol, timeframe, start, end, limit=500_000):
+            assert symbol == "MES"
+            assert timeframe == "1m"
+            idx = pd.date_range(start, periods=2, freq="1min", tz="UTC")
+            return pd.DataFrame(
+                {
+                    "open": [1.0, 2.0],
+                    "high": [2.0, 3.0],
+                    "low": [0.5, 1.5],
+                    "close": [1.5, 2.5],
+                    "volume": [100.0, 200.0],
+                },
+                index=idx,
+            )
+
+    runner = cwr.ChartWatchRunner()
+    runner._timescale = FakeStore()
+    start = datetime(2025, 1, 6, 14, 30, tzinfo=timezone.utc)
+    end = datetime(2025, 1, 6, 15, 0, tzinfo=timezone.utc)
+    bars = [b async for b in runner._symbol_bar_source("MES", start=start, end=end)]
+    assert len(bars) == 2
+    assert bars[0].symbol == "MES"

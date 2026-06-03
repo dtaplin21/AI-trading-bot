@@ -24,3 +24,13 @@ def test_upsert_noop_when_unavailable():
         index=pd.date_range("2026-01-01", periods=1, freq="5min"),
     )
     assert store.upsert_ohlcv("MES", "5m", ohlcv) == 0
+
+
+def test_load_ohlcv_range_empty_when_unavailable():
+    from datetime import datetime, timezone
+
+    store = TimescaleStore(database_url="")
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2025, 1, 2, tzinfo=timezone.utc)
+    df = store.load_ohlcv_range("MES", "1m", start, end)
+    assert df.empty
