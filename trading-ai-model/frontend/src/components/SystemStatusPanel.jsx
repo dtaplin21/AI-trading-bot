@@ -254,6 +254,24 @@ function WatchedChartsPanel({ watchedCharts, grouped }) {
   ));
 }
 
+const WATCHER_SYMBOLS_MOCK = [
+  "MES", "ES", "MNQ", "NQ", "CL", "GC", "ZB", "RTY",
+  "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD",
+  "BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD", "XRPUSD",
+  "TSLA", "NVDA", "AAPL", "MSFT", "AMZN",
+];
+
+const MOCK_WATCHED_CHARTS = WATCHER_SYMBOLS_MOCK.map((symbol) => ({
+  symbol,
+  timeframe: "5m",
+  display_name: symbol,
+  label: symbol,
+  asset_class: "unknown",
+  status: "watching",
+  last_bar_at: null,
+  last_price: null,
+}));
+
 export const MOCK_DASHBOARD = {
   execution_mode: "paper",
   active_broker: "paper",
@@ -309,11 +327,8 @@ export const MOCK_DASHBOARD = {
       status: "open",
     },
   ],
-  watched_charts: [
-    { symbol: "MES", timeframe: "5m", label: "Micro E-mini S&P 500", status: "watching", last_bar_at: null, last_price: null },
-    { symbol: "ES", timeframe: "5m", label: "E-mini S&P 500", status: "watching", last_bar_at: null, last_price: null },
-    { symbol: "NQ", timeframe: "5m", label: "E-mini Nasdaq", status: "watching", last_bar_at: null, last_price: null },
-  ],
+  watched_charts: MOCK_WATCHED_CHARTS,
+  watched_chart_count: MOCK_WATCHED_CHARTS.length,
 };
 
 export default function SystemStatusPanel({ dashboard, loading = false, onPollingChange }) {
