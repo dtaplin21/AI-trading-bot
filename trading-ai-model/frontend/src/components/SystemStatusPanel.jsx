@@ -21,6 +21,14 @@ const CATEGORY_LABEL = {
   professional: "Professional",
 };
 
+const EXECUTION_MODE_LABEL = {
+  paper: "Paper",
+  coinbase: "Coinbase live",
+  oanda: "OANDA live",
+  live: "Multi-broker live",
+  disabled: "Disabled",
+};
+
 function fmtPrice(n) {
   if (n == null) return "—";
   return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -275,7 +283,9 @@ const MOCK_WATCHED_CHARTS = WATCHER_SYMBOLS_MOCK.map((symbol) => ({
 export const MOCK_DASHBOARD = {
   execution_mode: "paper",
   active_broker: "paper",
-  platform_summary: { connected: 1, configured: 0, total: 9 },
+  platform_summary: { connected: 1, configured: 0, total: 11 },
+  oanda_live_ready: false,
+  coinbase_live_ready: false,
   platforms: [
     {
       id: "paper",
@@ -284,6 +294,22 @@ export const MOCK_DASHBOARD = {
       asset_classes: ["futures", "stocks"],
       status: "connected",
       detail: "Simulated fills — no capital at risk",
+    },
+    {
+      id: "oanda",
+      name: "OANDA",
+      category: "retail",
+      asset_classes: ["forex"],
+      status: "disconnected",
+      detail: "Set OANDA_API_KEY and OANDA_ACCOUNT_ID; add oanda to ENABLED_BROKERS",
+    },
+    {
+      id: "coinbase",
+      name: "Coinbase",
+      category: "retail",
+      asset_classes: ["crypto"],
+      status: "disconnected",
+      detail: "Set COINBASE_API_KEY and COINBASE_API_SECRET; add coinbase to ENABLED_BROKERS",
     },
     {
       id: "robinhood",
@@ -368,9 +394,22 @@ export default function SystemStatusPanel({ dashboard, loading = false, onPollin
           <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
             Mode:{" "}
             <strong style={{ color: "var(--color-text-primary)" }}>
-              {data.execution_mode || "paper"}
+              {EXECUTION_MODE_LABEL[data.execution_mode] || data.execution_mode || "paper"}
             </strong>
           </span>
+          {(data.oanda_live_ready || data.coinbase_live_ready) && (
+            <>
+              <span style={{ color: "var(--color-border-tertiary)" }}>|</span>
+              <span style={{ fontSize: 12, color: "#27500A" }}>
+                {[
+                  data.coinbase_live_ready && "Coinbase ready",
+                  data.oanda_live_ready && "OANDA ready",
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
+            </>
+          )}
           <span style={{ color: "var(--color-border-tertiary)" }}>|</span>
           <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
             Active:{" "}

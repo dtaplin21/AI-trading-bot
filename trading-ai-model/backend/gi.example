@@ -67,6 +67,20 @@ COINBASE_PORTFOLIO_ID=
 # Live orders: requires PAPER_TRADING_ENABLED=false AND coinbase in ENABLED_BROKERS
 COINBASE_LIVE_ENABLED=false
 COINBASE_MAX_ORDER_USD=50
+
+# ── OANDA v20 (forex) ───────────────────────────────────────
+# API token from OANDA account → Manage API Access
+# ONDA_API_KEY is accepted as an alias for OANDA_API_KEY
+OANDA_API_KEY=
+# ONDA_API_KEY=
+OANDA_ACCOUNT_ID=
+# Practice (fxPractice) vs live (fxTrade)
+OANDA_PRACTICE=true
+# Live orders: PAPER_TRADING_ENABLED=false AND oanda in ENABLED_BROKERS
+OANDA_LIVE_ENABLED=false
+OANDA_DEFAULT_UNITS=1000
+OANDA_MAX_UNITS=10000
+
 ENABLED_BROKERS=paper
 
 # ── Risk engine (Coinbase primary account guardrails) ────────

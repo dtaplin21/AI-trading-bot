@@ -82,6 +82,26 @@ RISK_MAX_DAILY_LOSS_USD=30
 
 Live orders require all four gates: paper off, `COINBASE_LIVE_ENABLED`, credentials, and `coinbase` in `ENABLED_BROKERS`.
 
+### OANDA (forex execution)
+
+OANDA v20 is wired for **forex pairs only** (EURUSD, GBPUSD, USDJPY, etc.). The dashboard shows OANDA under **Trading platforms**; live readiness appears as `oanda_live_ready` on `GET /dashboard`.
+
+1. Copy OANDA vars from `gi.example` into `.env` (accepts `OANDA_API_KEY` or `ONDA_API_KEY`).
+2. Create an API token in OANDA → **Manage API Access**.
+3. Set `OANDA_ACCOUNT_ID` (or leave empty to auto-pick the first account on first order).
+4. Keep `OANDA_PRACTICE=true` until you are ready for the live fxTrade endpoint.
+
+```bash
+PAPER_TRADING_ENABLED=false
+OANDA_LIVE_ENABLED=true
+ENABLED_BROKERS=oanda
+OANDA_API_KEY=your-token
+OANDA_ACCOUNT_ID=101-001-1234567-001
+OANDA_PRACTICE=true
+```
+
+Live forex orders require: paper off, `OANDA_LIVE_ENABLED`, API key, and `oanda` in `ENABLED_BROKERS`. With both Coinbase and OANDA enabled, execution routes by symbol (crypto → Coinbase, forex → OANDA).
+
 ## Constraint Rules
 
 - **Gann**: research-only; modifies SignalRank ± only; 300+ samples + random baseline required

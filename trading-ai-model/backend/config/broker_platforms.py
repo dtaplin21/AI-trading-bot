@@ -62,6 +62,16 @@ BROKER_PLATFORMS: tuple[BrokerPlatform, ...] = (
         detail_disconnected="Set COINBASE_API_KEY and COINBASE_API_SECRET; add coinbase to ENABLED_BROKERS",
     ),
     BrokerPlatform(
+        id="oanda",
+        name="OANDA",
+        category="retail",
+        asset_classes=("forex",),
+        website="https://www.oanda.com",
+        env_flag="oanda_api_key",
+        detail_connected="v20 API — forex spot (practice or live)",
+        detail_disconnected="Set OANDA_API_KEY (or ONDA_API_KEY) and OANDA_ACCOUNT_ID; add oanda to ENABLED_BROKERS",
+    ),
+    BrokerPlatform(
         id="alpaca",
         name="Alpaca",
         category="retail",
@@ -138,6 +148,8 @@ def _has_credentials(settings: Settings, broker: BrokerPlatform) -> bool:
         return bool(settings.webull_app_key and settings.webull_app_secret)
     if broker.id == "coinbase":
         return bool(settings.coinbase_api_key and settings.coinbase_api_secret)
+    if broker.id == "oanda":
+        return bool(settings.oanda_api_key)
     if broker.id == "alpaca":
         return bool(settings.alpaca_api_key and settings.alpaca_secret_key)
     if broker.id == "schwab":
@@ -185,6 +197,16 @@ def build_broker_platforms(settings: Optional[Settings] = None) -> list[dict]:
         elif broker.id == "coinbase" and settings.coinbase_api_key:
             mode = "Live" if settings.coinbase_live_enabled and not settings.paper_trading_enabled else "Paper / configured"
             account_hint = f" · {mode}"
+        elif broker.id == "oanda" and settings.oanda_api_key:
+            env_label = "Practice" if settings.oanda_practice else "Live"
+            mode = (
+                f"{env_label} trading"
+                if settings.oanda_live_enabled and not settings.paper_trading_enabled
+                else "Configured"
+            )
+            acct = settings.oanda_account_id
+            acct_hint = f" · …{acct[-4:]}" if acct and len(acct) >= 4 else ""
+            account_hint = f" · {mode}{acct_hint}"
         elif broker.id == "alpaca" and settings.alpaca_api_key:
             account_hint = " · " + ("Paper" if settings.alpaca_paper else "Live")
 

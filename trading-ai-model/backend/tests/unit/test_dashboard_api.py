@@ -24,6 +24,7 @@ def test_dashboard_overview():
     assert any(p["id"] == "paper" for p in data["platforms"])
     assert any(p["id"] == "robinhood" for p in data["platforms"])
     assert any(p["name"] == "Tradovate" for p in data["platforms"])
+    assert any(p["id"] == "oanda" for p in data["platforms"])
 
 
 def test_broker_platforms_include_retail_and_futures():

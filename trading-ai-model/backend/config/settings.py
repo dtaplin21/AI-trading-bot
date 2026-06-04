@@ -1,8 +1,10 @@
 """Global config, env vars, and constants."""
 
 import logging
+import os
 from functools import lru_cache
 from pathlib import Path
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from config.env_resolve import env_var_from_file, is_env_placeholder
@@ -66,7 +68,18 @@ class Settings(BaseSettings):
     coinbase_live_enabled: bool = False
     coinbase_max_order_usd: float = 50.0
 
-    # Broker / trading platforms (comma-separated ids: paper,coinbase,robinhood,alpaca,...)
+    # OANDA v20 (forex execution — practice vs live account)
+    oanda_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("OANDA_API_KEY", "ONDA_API_KEY", "oanda_api_key"),
+    )
+    oanda_account_id: str = ""
+    oanda_practice: bool = True
+    oanda_live_enabled: bool = False
+    oanda_default_units: int = 1000
+    oanda_max_units: int = 10000
+
+    # Broker / trading platforms (comma-separated ids: paper,coinbase,oanda,robinhood,alpaca,...)
     enabled_brokers: str = "paper"
 
     robinhood_access_token: str = ""
@@ -122,6 +135,12 @@ def _apply_env_file_fallbacks(settings: Settings) -> Settings:
         fallback = env_var_from_file("POLYGON_API_KEY", _BACKEND_DIR)
         if fallback:
             updates["polygon_api_key"] = fallback
+    if not (settings.oanda_api_key or "").strip():
+        for name in ("OANDA_API_KEY", "ONDA_API_KEY"):
+            fallback = env_var_from_file(name, _BACKEND_DIR) or os.getenv(name, "").strip()
+            if fallback and not is_env_placeholder(fallback):
+                updates["oanda_api_key"] = fallback
+                break
     if updates:
         logger.warning(
             "Ignoring placeholder env vars (%s); using backend/.env",

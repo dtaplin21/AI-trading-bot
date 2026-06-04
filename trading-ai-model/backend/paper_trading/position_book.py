@@ -12,6 +12,8 @@ from config.symbols import SYMBOLS
 
 BROKER_DISPLAY_NAMES: dict[str, str] = {
     "paper": "Paper Trading",
+    "coinbase": "Coinbase",
+    "oanda": "OANDA",
     "robinhood": "Robinhood",
     "webull": "Webull",
     "alpaca": "Alpaca",
