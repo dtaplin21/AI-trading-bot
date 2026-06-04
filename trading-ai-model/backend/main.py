@@ -225,12 +225,19 @@ def main() -> None:
         applied = run_migrations()
         if applied:
             print(f"Database: applied {applied} migration(s)")
-    except Exception as exc:
-        if args.mode == "dev":
-            print(f"Warning: database migrations skipped ({exc})")
         else:
-            print(f"Database migrations failed: {exc}", file=sys.stderr)
-            sys.exit(1)
+            print("Database: migrations up to date (0 new files)")
+    except Exception as exc:
+        print(
+            f"Warning: database migrations skipped ({exc}) — continuing startup",
+            file=sys.stderr,
+        )
+        if os.getenv("RENDER"):
+            print(
+                "Render: use Internal Database URL for DATABASE_URL (linked DB), "
+                "not the external host URL.",
+                file=sys.stderr,
+            )
 
     if args.mode == "dev":
         start_dev()

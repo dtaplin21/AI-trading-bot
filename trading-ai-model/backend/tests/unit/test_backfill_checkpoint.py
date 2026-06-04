@@ -24,6 +24,43 @@ def test_resume_after_chunk(tmp_path: Path):
     assert cp.is_done("MES")
 
 
+def test_reset_futures_keeps_forex(tmp_path: Path):
+    path = tmp_path / "checkpoint.json"
+    path.write_text(
+        json.dumps(
+            {
+                "timeframe": "1m",
+                "start": "2025-01-01",
+                "end": "2025-12-31",
+                "symbols": {
+                    "MES": {
+                        "status": "done",
+                        "last_date": "2025-12-31",
+                        "bars_saved": 0,
+                        "chunks_done": 5,
+                    },
+                    "EURUSD": {
+                        "status": "in_progress",
+                        "last_date": "2025-03-01",
+                        "bars_saved": 58910,
+                        "chunks_done": 2,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    cp = CheckpointManager(
+        path, timeframe="1m", start="2025-01-01", end="2025-12-31", symbols=["MES", "EURUSD"]
+    )
+    cp.load()
+    reset = cp.reset_futures_for_rebackfill(["MES"], only_zero_bars=True)
+    assert reset == ["MES"]
+    assert cp._data["symbols"]["MES"]["status"] == "pending"
+    assert cp._data["symbols"]["EURUSD"]["bars_saved"] == 58910
+    assert cp._data["symbols"]["EURUSD"]["status"] == "in_progress"
+
+
 def test_load_mismatch_restarts_fresh(tmp_path: Path):
     path = tmp_path / "checkpoint.json"
     path.write_text(

@@ -8,7 +8,9 @@ CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 # TimescaleDB / Postgres
 # docker compose up -d  →  postgresql://trading:trading@localhost:5432/trading_ai
 DATABASE_URL=postgresql://trading:trading@localhost:5432/trading_ai
-# Remote Render: append ?sslmode=require — sslrootcert uses certifi automatically
+# Remote Render: Internal Database URL on web/worker (fromDatabase in render.yaml)
+# External/local Mac: ?sslmode=require — certifi CA via pg_connect.py
+# PGSSLMODE=require
 
 # Polygon backfill — futures use contract codes (MESH25, …) for BACKFILL year
 # BACKFILL_FUTURES_YEAR=2025

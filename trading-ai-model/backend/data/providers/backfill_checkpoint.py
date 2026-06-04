@@ -6,9 +6,18 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 logger = logging.getLogger(__name__)
+
+_PENDING_ENTRY: dict[str, Any] = {
+    "status": "pending",
+    "last_date": None,
+    "last_contract": None,
+    "bars_saved": 0,
+    "chunks_done": 0,
+    "last_updated": None,
+}
 
 
 class CheckpointManager:
@@ -73,23 +82,53 @@ class CheckpointManager:
             logger.info("Checkpoint deleted — starting from scratch")
         self._init_fresh()
 
+    def reset_symbols(self, symbols: Iterable[str]) -> list[str]:
+        """Set symbols back to pending (keeps forex/crypto/equity progress intact)."""
+        if not self._data.get("symbols"):
+            return []
+        reset: list[str] = []
+        for sym in symbols:
+            key = sym.upper()
+            if key not in self._data["symbols"]:
+                continue
+            self._data["symbols"][key] = dict(_PENDING_ENTRY)
+            reset.append(key)
+        if reset:
+            self._save()
+            logger.info("Checkpoint reset to pending: %s", ", ".join(reset))
+        return reset
+
+    def reset_futures_for_rebackfill(
+        self,
+        futures_symbols: Iterable[str],
+        *,
+        only_zero_bars: bool = False,
+    ) -> list[str]:
+        """
+        Re-queue futures after a bad run (e.g. C:MES with 0 bars).
+
+        only_zero_bars=True — only reset futures marked done with bars_saved==0.
+        only_zero_bars=False — reset all listed futures regardless of progress.
+        """
+        to_reset: list[str] = []
+        for sym in futures_symbols:
+            key = sym.upper()
+            entry = self._data.get("symbols", {}).get(key)
+            if not entry:
+                continue
+            if only_zero_bars:
+                if entry.get("status") != "done" or entry.get("bars_saved", 0) > 0:
+                    continue
+            to_reset.append(key)
+        return self.reset_symbols(to_reset)
+
     def _init_fresh(self) -> None:
         self._data = {
             "created_at": datetime.now(tz=timezone.utc).isoformat(),
             "timeframe": self.timeframe,
             "start": self.start,
             "end": self.end,
-            "symbols": {
-                sym: {
-                    "status": "pending",
-                    "last_date": None,
-                    "last_contract": None,
-                    "bars_saved": 0,
-                    "chunks_done": 0,
-                    "last_updated": None,
-                }
-                for sym in self.symbols
-            },
+            "symbols": {sym: dict(_PENDING_ENTRY) for sym in self.symbols},
         }
         self._save()
 

@@ -20,7 +20,8 @@ Env:
   WATCHER_SYMBOLS          default symbol list
 
 Futures (MES, ES, …) use quarterly/monthly contract codes (MESH25, …) instead of C:MES.
-Re-run with --reset after a prior 0-bar futures run (wrong continuous tickers).
+Re-run futures only (keep EURUSD etc.): --redo-futures
+Full restart: --reset
 """
 from __future__ import annotations
 
@@ -40,6 +41,7 @@ if str(_BACKEND) not in sys.path:
 load_dotenv(_BACKEND / ".env")
 
 from config.env_resolve import is_env_placeholder, resolve_env
+from config.symbols import FUTURES_SYMBOLS
 from config.watchlist import watcher_symbols_from_env
 from data.providers.backfill_checkpoint import CheckpointManager
 from data.providers.futures_contracts import (
@@ -105,6 +107,16 @@ def _parse_args() -> argparse.Namespace:
         help="Checkpoint JSON path",
     )
     p.add_argument("--reset", action="store_true", help="Ignore checkpoint and start fresh")
+    p.add_argument(
+        "--redo-futures",
+        action="store_true",
+        help="Reset futures symbols to pending (keeps forex/crypto/equity progress)",
+    )
+    p.add_argument(
+        "--redo-futures-zero-only",
+        action="store_true",
+        help="With --redo-futures: only reset futures done with 0 bars_saved",
+    )
     p.add_argument("--status", action="store_true", help="Show progress and exit")
     p.add_argument(
         "--futures-year",
@@ -348,6 +360,17 @@ def main() -> int:
         checkpoint.reset()
     else:
         checkpoint.load()
+
+    if args.redo_futures:
+        reset_list = checkpoint.reset_futures_for_rebackfill(
+            FUTURES_SYMBOLS,
+            only_zero_bars=args.redo_futures_zero_only,
+        )
+        if not reset_list:
+            logger.warning(
+                "No futures symbols were reset "
+                "(use --redo-futures without --redo-futures-zero-only to force all futures)"
+            )
 
     if args.status:
         checkpoint.print_status()

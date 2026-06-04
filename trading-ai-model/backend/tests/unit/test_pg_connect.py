@@ -7,6 +7,7 @@ import pytest
 from data.storage.pg_connect import (
     _validate_database_url,
     is_database_url_placeholder,
+    normalize_database_url,
     psycopg2_connect_kwargs,
 )
 
@@ -31,3 +32,9 @@ def test_rejects_render_placeholder_url():
 
 def test_detects_render_hint_without_scheme():
     assert is_database_url_placeholder("<paste External URL with ?sslmode=require>")
+
+
+def test_normalize_adds_sslmode_for_remote():
+    url = "postgresql://u:p@dpg-abc.oregon-postgres.render.com:5432/db"
+    normalized = normalize_database_url(url)
+    assert "sslmode=require" in normalized
