@@ -15,7 +15,8 @@ Env:
   DATABASE_URL             required for DB upsert (unless --skip-db)
   BACKFILL_CHECKPOINT      default data/backfill_checkpoint.json
   BACKFILL_RATE_SLEEP      seconds on 429 (default 65)
-  BACKFILL_CHUNK_DAYS      default 30
+  BACKFILL_CHUNK_DAYS      default 30 (use 10 for remote Postgres / large 1m writes)
+  DATABASE_CONNECT_TIMEOUT connect_timeout via pg_connect.py (default 30)
   BACKFILL_FUTURES_YEAR    contract calendar year (default: year of --end)
   WATCHER_SYMBOLS          default symbol list
 

@@ -14,7 +14,13 @@ from data.storage.pg_connect import (
 
 def test_localhost_no_ssl_kwargs():
     url = "postgresql://u:p@localhost:5432/db"
-    assert psycopg2_connect_kwargs(url) == {}
+    assert psycopg2_connect_kwargs(url) == {"connect_timeout": 30}
+
+
+def test_connect_timeout_from_env(monkeypatch):
+    monkeypatch.setenv("DATABASE_CONNECT_TIMEOUT", "45")
+    url = "postgresql://u:p@localhost:5432/db"
+    assert psycopg2_connect_kwargs(url)["connect_timeout"] == 45
 
 
 def test_render_host_gets_sslrootcert():

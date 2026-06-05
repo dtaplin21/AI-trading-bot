@@ -11,9 +11,12 @@ DATABASE_URL=postgresql://trading:trading@localhost:5432/trading_ai
 # Remote Render: Internal Database URL on web/worker (fromDatabase in render.yaml)
 # External/local Mac: ?sslmode=require — certifi CA via pg_connect.py
 # PGSSLMODE=require
+# DATABASE_CONNECT_TIMEOUT=30
 
 # Polygon backfill — futures use contract codes (MESH25, …) for BACKFILL year
 # BACKFILL_FUTURES_YEAR=2025
+# BACKFILL_CHUNK_DAYS=10
+# Smaller chunks = smaller DB writes (less stall risk on remote Postgres)
 
 # Data sources
 MARKET_DATA_PROVIDER=

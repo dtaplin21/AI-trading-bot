@@ -149,7 +149,11 @@ activemq-data/
 
 # Environments
 .env
+.env.example
 .envrc
+
+# Local Render deploy sketch (manage in Render dashboard)
+render.yaml
 .venv
 env/
 venv/

@@ -35,6 +35,19 @@ def _ssl_mode_from_env() -> str:
     )
 
 
+def _connect_timeout_seconds() -> int:
+    """Seconds before connect() fails; avoids hung backfill writes to remote Postgres."""
+    raw = (
+        os.getenv("PGCONNECT_TIMEOUT", "").strip()
+        or os.getenv("DATABASE_CONNECT_TIMEOUT", "").strip()
+        or "30"
+    )
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 30
+
+
 def normalize_database_url(database_url: str) -> str:
     """
     Ensure remote URLs include sslmode when missing (Render / external Postgres).
@@ -63,19 +76,24 @@ def psycopg2_connect_kwargs(database_url: str) -> dict[str, Any]:
     Extra kwargs for psycopg2.connect(dsn, **kwargs).
 
     Env:
+      PGCONNECT_TIMEOUT / DATABASE_CONNECT_TIMEOUT — connect_timeout seconds (default 30)
       PGSSLMODE / DATABASE_SSL_MODE — sslmode (default require for remote)
       DATABASE_SSL_ROOTCERT       — path to CA bundle (default: certifi for remote)
       DATABASE_SSL_DISABLE        — if true, sslmode=disable (local docker / Render internal)
     """
+    kwargs: dict[str, Any] = {"connect_timeout": _connect_timeout_seconds()}
+
     if os.getenv("DATABASE_SSL_DISABLE", "").lower() in ("true", "1", "yes"):
-        return {"sslmode": "disable"}
+        kwargs["sslmode"] = "disable"
+        return kwargs
 
     if not _remote_ssl_host(database_url):
-        return {}
+        return kwargs
 
     sslmode = _ssl_mode_from_env()
     if sslmode.lower() == "disable":
-        return {"sslmode": "disable"}
+        kwargs["sslmode"] = "disable"
+        return kwargs
 
     rootcert = os.getenv("DATABASE_SSL_ROOTCERT", "").strip()
     if not rootcert:
@@ -87,9 +105,12 @@ def psycopg2_connect_kwargs(database_url: str) -> dict[str, Any]:
             logger.warning(
                 "certifi not installed — remote Postgres SSL may fail; pip install certifi"
             )
-            return {"sslmode": sslmode}
+            kwargs["sslmode"] = sslmode
+            return kwargs
 
-    return {"sslmode": sslmode, "sslrootcert": rootcert}
+    kwargs["sslmode"] = sslmode
+    kwargs["sslrootcert"] = rootcert
+    return kwargs
 
 
 def is_database_url_placeholder(database_url: str) -> bool:
@@ -122,9 +143,7 @@ def connect_psycopg2(database_url: str):
     url = normalize_database_url(database_url)
     kwargs = psycopg2_connect_kwargs(url)
     try:
-        if kwargs:
-            return psycopg2.connect(url, **kwargs)
-        return psycopg2.connect(url)
+        return psycopg2.connect(url, **kwargs)
     except OperationalError as exc:
         err = str(exc).lower()
         if "ssl" not in err and "certificate" not in err:
@@ -133,7 +152,9 @@ def connect_psycopg2(database_url: str):
         try:
             import certifi
 
-            retry_kwargs = {"sslmode": kwargs.get("sslmode", "require"), "sslrootcert": certifi.where()}
+            retry_kwargs = dict(kwargs)
+            retry_kwargs["sslmode"] = kwargs.get("sslmode", "require")
+            retry_kwargs["sslrootcert"] = certifi.where()
             logger.warning("Postgres SSL retry with certifi CA bundle")
             return psycopg2.connect(url, **retry_kwargs)
         except Exception:
