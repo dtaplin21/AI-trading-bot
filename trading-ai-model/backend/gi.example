@@ -47,6 +47,8 @@ ANTHROPIC_MAX_TOKENS=350
 #   python scripts/backfill_polygon.py --skip-db --timeframe 1m --start 2025-01-01 --end 2025-12-31 --chunk-days 10
 #   python scripts/backfill_polygon.py --sync-from-storage --status
 #   python scripts/backfill_polygon.py --futures-only --start 2024-01-01 --end 2025-12-31 --chunk-days 10
+# Upload local CSVs to Render DB later:
+#   python scripts/import_ohlcv_csv.py --timeframe 1m
 # DB + optional CSV: omit --skip-db
 # BACKFILL_START=2024-01-01
 # BACKFILL_END=2025-12-31

@@ -27,7 +27,9 @@ cd backend
 source .venv/bin/activate
 # CSV-only (fast, no remote Postgres write stalls):
 python scripts/backfill_polygon.py --skip-db --timeframe 1m --start 2025-01-01 --end 2025-12-31 --chunk-days 10
-# Or DB upsert: omit --skip-db (requires DATABASE_URL)
+# Upload CSVs to DB later (set DATABASE_URL to Render when ready):
+python scripts/import_ohlcv_csv.py --timeframe 1m
+# Or DB upsert during backfill: omit --skip-db (requires DATABASE_URL)
 ```
 
 Replay prefers `data/ohlcv/{SYMBOL}_1m.csv` when present (`WATCHER_DATA_PATH`). Then set `WATCHER_MODE=replay` on the worker and redeploy.

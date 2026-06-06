@@ -167,6 +167,54 @@ def test_fetch_chunk_sets_diagnostic_when_empty():
     assert "No data found" in client.last_chunk_diagnostic
 
 
+def test_fetch_futures_chunk_parses_window_start():
+    payload = {
+        "status": "OK",
+        "results": [
+            {
+                "open": 5000.0,
+                "high": 5005.0,
+                "low": 4995.0,
+                "close": 5002.0,
+                "volume": 1200,
+                "window_start": 1704067200000000000,
+                "ticker": "MESH5",
+            }
+        ],
+    }
+    client = PolygonBackfillClient(api_key="test-key", request_delay=0)
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = payload
+
+    with patch("data.providers.polygon_backfill.httpx.Client") as mock_client_cls:
+        mock_http = MagicMock()
+        mock_http.__enter__.return_value = mock_http
+        mock_http.get.return_value = mock_response
+        mock_client_cls.return_value = mock_http
+
+        start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        end = datetime(2025, 1, 10, tzinfo=timezone.utc)
+        df = client.fetch_chunk(
+            "MES",
+            "1m",
+            start,
+            end,
+            ticker="MESH5",
+            use_futures_api=True,
+        )
+
+    assert len(df) == 1
+    assert df.iloc[0]["close"] == 5002.0
+    call_args = mock_http.get.call_args
+    assert "/futures/v1/aggs/MESH5" in call_args[0][0]
+    params = call_args[1]["params"]
+    assert params["resolution"] == "1min"
+    assert params["window_start.gte"] == "2025-01-01"
+    assert params["window_start.lte"] == "2025-01-10"
+
+
 def test_export_ohlcv_csv(tmp_path):
     idx = pd.date_range("2025-01-01", periods=2, freq="1min", tz="UTC")
     df = pd.DataFrame(

@@ -2,7 +2,8 @@
 CME futures contract windows for Polygon historical backfill.
 
 Continuous tickers (C:MES) often return empty results; backfill uses explicit
-quarterly/monthly contract codes (e.g. MESH25, MESM25) clipped to roll windows.
+quarterly/monthly contract codes (e.g. MESH25 internally) mapped to Massive
+futures tickers (MESH5) on GET /futures/v1/aggs/{ticker}.
 """
 
 from __future__ import annotations
@@ -95,8 +96,16 @@ class FuturesContractWindow:
 
 
 def contract_to_polygon_ticker(contract_code: str) -> str:
-    """Polygon aggregate ticker for a specific futures contract (not C:continuous)."""
-    return contract_code.upper()
+    """
+    Massive futures aggs ticker for a specific contract (not C:continuous).
+
+    Internal codes use a two-digit year suffix (MESH25); the futures API expects
+    a single digit (MESH5). Example from docs: GCJ5 for April 2025 gold.
+    """
+    code = contract_code.upper()
+    if len(code) >= 3 and code[-2:].isdigit():
+        return f"{code[:-2]}{code[-1]}"
+    return code
 
 
 def job_years(job_start: datetime, job_end: datetime) -> list[int]:

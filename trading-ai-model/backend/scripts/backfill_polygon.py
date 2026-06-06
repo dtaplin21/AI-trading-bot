@@ -14,6 +14,7 @@ Usage (from backend/):
 
   # CSV-only (no DB writes — avoids remote Postgres stalls during download):
   python scripts/backfill_polygon.py --skip-db --timeframe 1m --start 2025-01-01 --end 2025-12-31 --chunk-days 10
+  # Upload CSVs to TimescaleDB later: python scripts/import_ohlcv_csv.py --timeframe 1m
   # Replay reads CSV first: WATCHER_DATA_PATH=data/ohlcv
 
 Env:
@@ -27,7 +28,8 @@ Env:
   BACKFILL_FUTURES_YEAR    contract calendar year (default: year of --end)
   WATCHER_SYMBOLS          default symbol list
 
-Futures (MES, ES, …) use quarterly/monthly contract codes (MESH25, …) instead of C:MES.
+Futures (MES, ES, …) use Massive GET /futures/v1/aggs/{ticker} with contract
+codes (internal MESH25 → API ticker MESH5), not v2 /aggs/ticker/C:MES.
 Re-run futures only (keep EURUSD etc.): --redo-futures
 Full restart: --reset
 """
@@ -186,6 +188,7 @@ def _process_chunk(
             chunk_start,
             chunk_end,
             ticker=polygon_ticker,
+            use_futures_api=contract_code is not None,
         )
     except Exception as exc:
         logger.exception(

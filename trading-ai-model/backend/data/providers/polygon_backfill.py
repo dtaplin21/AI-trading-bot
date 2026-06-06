@@ -1,7 +1,8 @@
 """
-Polygon.io historical aggregate backfill for TimescaleDB / CSV replay files.
+Polygon.io / Massive historical aggregate backfill for TimescaleDB / CSV replay.
 
-Uses: GET /v2/aggs/ticker/{ticker}/range/{multiplier}/{timespan}/{from}/{to}
+Non-futures: GET /v2/aggs/ticker/{ticker}/range/{multiplier}/{timespan}/{from}/{to}
+Futures contracts: GET /futures/v1/aggs/{ticker}?resolution=1min&window_start.gte=...
 """
 
 from __future__ import annotations
@@ -36,12 +37,32 @@ TIMEFRAME_SPEC: dict[str, tuple[int, str]] = {
     "1d": (1, "day"),
 }
 
+# Internal timeframe → Massive futures /futures/v1/aggs resolution
+FUTURES_RESOLUTION: dict[str, str] = {
+    "1m": "1min",
+    "5m": "5min",
+    "15m": "15min",
+    "1h": "1hour",
+    "1d": "1session",
+}
+
+FUTURES_AGGS_BASE = "https://api.polygon.io/futures/v1/aggs"
+
 
 def parse_timeframe(timeframe: str) -> tuple[int, str]:
     tf = timeframe.strip().lower()
     if tf not in TIMEFRAME_SPEC:
         raise ValueError(f"Unsupported timeframe {timeframe!r}; use one of {list(TIMEFRAME_SPEC)}")
     return TIMEFRAME_SPEC[tf]
+
+
+def parse_futures_resolution(timeframe: str) -> str:
+    tf = timeframe.strip().lower()
+    if tf not in FUTURES_RESOLUTION:
+        raise ValueError(
+            f"Unsupported futures timeframe {timeframe!r}; use one of {list(FUTURES_RESOLUTION)}"
+        )
+    return FUTURES_RESOLUTION[tf]
 
 
 def parse_date(s: str) -> datetime:
@@ -109,8 +130,8 @@ def empty_agg_data_advice(polygon_status: str | None, message: str | None) -> st
     if "ticker" in msg and ("not found" in msg or "unknown" in msg or "invalid" in msg):
         return "Ticker may be wrong — futures often need a contract code, not C:SYMBOL."
     return (
-        "Common causes: wrong futures ticker (C:MES vs contract), plan excludes "
-        "futures 1m history, or no trading in that date range."
+        "Common causes: wrong futures ticker (need MESH5 not MESH25 on "
+        "/futures/v1/aggs), plan excludes futures history, or no trading in range."
     )
 
 
@@ -126,6 +147,21 @@ def _agg_row_to_series(ticker_symbol: str, row: dict) -> dict | None:
         "low": float(row.get("l", 0)),
         "close": float(row.get("c", 0)),
         "volume": float(row.get("v", 0)),
+    }
+
+
+def _futures_row_to_series(row: dict) -> dict | None:
+    ws = row.get("window_start")
+    if ws is None:
+        return None
+    ts = datetime.fromtimestamp(float(ws) / 1_000_000_000.0, tz=timezone.utc)
+    return {
+        "time": ts,
+        "open": float(row.get("open", 0)),
+        "high": float(row.get("high", 0)),
+        "low": float(row.get("low", 0)),
+        "close": float(row.get("close", 0)),
+        "volume": float(row.get("volume", 0)),
     }
 
 
@@ -209,11 +245,133 @@ class PolygonBackfillClient:
         end: datetime,
         *,
         ticker: str | None = None,
+        use_futures_api: bool = False,
     ) -> pd.DataFrame:
         """Fetch one date window (used by resumable backfill script)."""
+        if use_futures_api:
+            resolved = ticker or symbol
+            return self._fetch_futures_chunk(resolved, symbol, timeframe, start, end)
         multiplier, timespan = parse_timeframe(timeframe)
         resolved = ticker or self.resolve_ticker(symbol)
         return self._fetch_chunk(resolved, symbol, multiplier, timespan, start, end)
+
+    def _fetch_futures_chunk(
+        self,
+        ticker: str,
+        symbol: str,
+        timeframe: str,
+        start: datetime,
+        end: datetime,
+    ) -> pd.DataFrame:
+        """Fetch one date window from Massive GET /futures/v1/aggs/{ticker}."""
+        resolution = parse_futures_resolution(timeframe)
+        url = f"{FUTURES_AGGS_BASE}/{ticker}"
+        params = {
+            "resolution": resolution,
+            "window_start.gte": start.strftime("%Y-%m-%d"),
+            "window_start.lte": end.strftime("%Y-%m-%d"),
+            "sort": "window_start.asc",
+            "limit": 50000,
+            "apiKey": self._api_key,
+        }
+        rows: list[dict] = []
+        self.last_chunk_diagnostic = ""
+        sample_empty_payload: dict | None = None
+        sample_http_status = 200
+
+        with httpx.Client(timeout=HTTP_TIMEOUT) as client:
+            next_url: str | None = url
+            use_query_params = True
+            while next_url:
+                if use_query_params:
+                    response = client.get(next_url, params=params)
+                else:
+                    response = client.get(self._ensure_api_key(next_url))
+                if response.status_code == 429:
+                    logger.warning(
+                        "PolygonBackfill[%s]: futures rate limited — sleeping %.0fs",
+                        symbol,
+                        self._rate_limit_sleep,
+                    )
+                    time.sleep(self._rate_limit_sleep)
+                    continue
+                if response.status_code == 401 and use_query_params:
+                    logger.warning(
+                        "PolygonBackfill[%s]: futures 401 — retrying with apiKey",
+                        symbol,
+                    )
+                    use_query_params = False
+                    next_url = self._ensure_api_key(next_url)
+                    time.sleep(2)
+                    continue
+                if response.status_code == 403:
+                    logger.error(
+                        "PolygonBackfill[%s]: futures forbidden (ticker=%s) — check plan",
+                        symbol,
+                        ticker,
+                    )
+                    break
+                response.raise_for_status()
+                payload = response.json()
+                status = payload.get("status")
+                page_results = payload.get("results") or []
+                if not page_results and sample_empty_payload is None:
+                    sample_empty_payload = payload
+                    sample_http_status = response.status_code
+                if status not in ("OK", "DELAYED", None):
+                    logger.warning(
+                        "PolygonBackfill[%s]: futures %s (ticker=%s, %s → %s)",
+                        symbol,
+                        format_polygon_agg_hint(payload, http_status=response.status_code),
+                        ticker,
+                        start.date(),
+                        end.date(),
+                    )
+                for row in page_results:
+                    parsed = _futures_row_to_series(row)
+                    if parsed:
+                        rows.append(parsed)
+                page_next = payload.get("next_url")
+                if page_next:
+                    next_url = self._ensure_api_key(page_next)
+                    use_query_params = False
+                    if self._delay > 0:
+                        time.sleep(self._delay)
+                else:
+                    next_url = None
+
+        if not rows:
+            if sample_empty_payload is not None:
+                hint = format_polygon_agg_hint(
+                    sample_empty_payload, http_status=sample_http_status
+                )
+                advice = empty_agg_data_advice(
+                    sample_empty_payload.get("status"),
+                    sample_empty_payload.get("message")
+                    or sample_empty_payload.get("error"),
+                )
+                self.last_chunk_diagnostic = f"{hint} — {advice}"
+                logger.warning(
+                    "PolygonBackfill[%s]: empty futures chunk ticker=%s %s → %s | %s",
+                    symbol,
+                    ticker,
+                    start.date(),
+                    end.date(),
+                    self.last_chunk_diagnostic,
+                )
+            else:
+                self.last_chunk_diagnostic = "HTTP OK but no futures aggregate pages returned"
+                logger.warning(
+                    "PolygonBackfill[%s]: empty futures chunk ticker=%s %s → %s (no body)",
+                    symbol,
+                    ticker,
+                    start.date(),
+                    end.date(),
+                )
+            return _empty_ohlcv_df()
+
+        df = pd.DataFrame(rows).set_index("time").sort_index()
+        return _select_ohlcv_columns(df)
 
     def _fetch_chunk(
         self,

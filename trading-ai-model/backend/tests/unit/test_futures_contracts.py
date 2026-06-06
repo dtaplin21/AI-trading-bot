@@ -17,7 +17,7 @@ def test_mes_has_four_quarterly_contracts_2025():
     windows = get_contract_windows("MES", 2025, start, end)
     codes = [w.contract_code for w in windows]
     assert codes == ["MESH25", "MESM25", "MESU25", "MESZ25"]
-    assert all(w.polygon_ticker == w.contract_code for w in windows)
+    assert [w.polygon_ticker for w in windows] == ["MESH5", "MESM5", "MESU5", "MESZ5"]
 
 
 def test_cl_has_twelve_monthly_contracts_2025():
@@ -47,7 +47,10 @@ def test_infer_backfill_year():
 
 
 def test_contract_to_polygon_ticker():
-    assert contract_to_polygon_ticker("mesh25") == "MESH25"
+    assert contract_to_polygon_ticker("mesh25") == "MESH5"
+    assert contract_to_polygon_ticker("ESH24") == "ESH4"
+    assert contract_to_polygon_ticker("GCJ25") == "GCJ5"
+    assert contract_to_polygon_ticker("CLF25") == "CLF5"
 
 
 def test_mes_two_year_job_has_eight_contracts():

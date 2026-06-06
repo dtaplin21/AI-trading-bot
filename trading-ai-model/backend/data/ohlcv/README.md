@@ -37,3 +37,10 @@ Generate files with Polygon backfill (CSV-only, no DB):
 ```bash
 python scripts/backfill_polygon.py --skip-db --timeframe 1m --start 2025-01-01 --end 2025-12-31 --chunk-days 10
 ```
+
+Upload local CSVs to TimescaleDB later (e.g. Render `DATABASE_URL`):
+
+```bash
+python scripts/import_ohlcv_csv.py --timeframe 1m
+python scripts/import_ohlcv_csv.py --symbols MES,ES,BTCUSD --timeframe 1m --dry-run
+```
