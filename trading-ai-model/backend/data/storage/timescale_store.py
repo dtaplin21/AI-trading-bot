@@ -367,15 +367,34 @@ class TimescaleStore:
     def count_bars(self, symbol: str, timeframe: str = "5m") -> int:
         if not self._available:
             return 0
+        count, _, _ = self.ohlcv_storage_stats(symbol, timeframe)
+        return count
+
+    def ohlcv_storage_stats(
+        self, symbol: str, timeframe: str
+    ) -> tuple[int, Optional[datetime], Optional[datetime]]:
+        """Row count and min/max bar timestamps for backfill checkpoint sync."""
+        if not self._available:
+            return 0, None, None
         sql = """
-            SELECT COUNT(*) FROM ohlcv_candles
+            SELECT COUNT(*), MIN(time), MAX(time)
+            FROM ohlcv_candles
             WHERE symbol = %s AND timeframe = %s
         """
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, (symbol.upper(), timeframe))
                 row = cur.fetchone()
-        return int(row[0]) if row else 0
+        if not row or not row[0]:
+            return 0, None, None
+        count = int(row[0])
+        min_t = row[1]
+        max_t = row[2]
+        if min_t and min_t.tzinfo is None:
+            min_t = min_t.replace(tzinfo=timezone.utc)
+        if max_t and max_t.tzinfo is None:
+            max_t = max_t.replace(tzinfo=timezone.utc)
+        return count, min_t, max_t
 
     def insert_observation(self, symbol: str, timeframe: str, signal_rank: int, payload: dict) -> None:
         if not self._available:

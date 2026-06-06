@@ -55,19 +55,27 @@ class CheckpointManager:
             logger.warning("Checkpoint read failed (%s) — starting fresh", exc)
             self._init_fresh()
             return
-        if (
-            self._data.get("timeframe") != self.timeframe
-            or self._data.get("start") != self.start
-            or self._data.get("end") != self.end
-        ):
+        if self._data.get("timeframe") != self.timeframe:
             logger.warning(
-                "Checkpoint is for a different job (was %s→%s %s) — starting fresh. Use --reset to clear.",
-                self._data.get("start"),
-                self._data.get("end"),
+                "Checkpoint timeframe mismatch (was %s) — starting fresh. Use --reset to clear.",
                 self._data.get("timeframe"),
             )
             self._init_fresh()
             return
+        if self._data.get("start") != self.start or self._data.get("end") != self.end:
+            logger.info(
+                "Updating checkpoint job window %s→%s to %s→%s (symbol progress preserved)",
+                self._data.get("start"),
+                self._data.get("end"),
+                self.start,
+                self.end,
+            )
+            self._data["start"] = self.start
+            self._data["end"] = self.end
+            self._ensure_symbols()
+            self._save()
+        else:
+            self._ensure_symbols()
         done = self._count_status("done")
         remaining = len(self.symbols) - done
         logger.info(
@@ -122,13 +130,19 @@ class CheckpointManager:
             to_reset.append(key)
         return self.reset_symbols(to_reset)
 
+    def _ensure_symbols(self) -> None:
+        """Add pending entries for symbols in the current job that are missing from checkpoint."""
+        bucket = self._data.setdefault("symbols", {})
+        for sym in self.symbols:
+            bucket.setdefault(sym.upper(), dict(_PENDING_ENTRY))
+
     def _init_fresh(self) -> None:
         self._data = {
             "created_at": datetime.now(tz=timezone.utc).isoformat(),
             "timeframe": self.timeframe,
             "start": self.start,
             "end": self.end,
-            "symbols": {sym: dict(_PENDING_ENTRY) for sym in self.symbols},
+            "symbols": {sym.upper(): dict(_PENDING_ENTRY) for sym in self.symbols},
         }
         self._save()
 
@@ -138,7 +152,7 @@ class CheckpointManager:
 
     def get_resume_context(self, symbol: str) -> tuple[str | None, str | None]:
         """Return (resume_date YYYY-MM-DD or None if done, last_contract code or None)."""
-        entry = self._data.get("symbols", {}).get(symbol, {})
+        entry = self._data.get("symbols", {}).get(symbol.upper(), {})
         if entry.get("status") == "done":
             return None, None
         last_date = entry.get("last_date")
@@ -156,7 +170,7 @@ class CheckpointManager:
         *,
         last_contract: str | None = None,
     ) -> None:
-        entry = self._data["symbols"].setdefault(symbol, {})
+        entry = self._data["symbols"].setdefault(symbol.upper(), {})
         entry["status"] = "in_progress"
         entry["last_date"] = chunk_end
         if last_contract:
@@ -167,7 +181,7 @@ class CheckpointManager:
         self._save()
 
     def mark_symbol_done(self, symbol: str) -> None:
-        entry = self._data["symbols"].setdefault(symbol, {})
+        entry = self._data["symbols"].setdefault(symbol.upper(), {})
         entry["status"] = "done"
         entry["last_date"] = self.end
         entry["last_updated"] = datetime.now(tz=timezone.utc).isoformat()
@@ -175,7 +189,7 @@ class CheckpointManager:
         logger.info("%s complete — %d bars saved", symbol, entry.get("bars_saved", 0))
 
     def is_done(self, symbol: str) -> bool:
-        return self._data.get("symbols", {}).get(symbol, {}).get("status") == "done"
+        return self._data.get("symbols", {}).get(symbol.upper(), {}).get("status") == "done"
 
     def print_status(self) -> None:
         print(f"\n{'=' * 65}")

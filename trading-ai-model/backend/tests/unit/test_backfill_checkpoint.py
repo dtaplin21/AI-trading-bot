@@ -61,7 +61,36 @@ def test_reset_futures_keeps_forex(tmp_path: Path):
     assert cp._data["symbols"]["EURUSD"]["status"] == "in_progress"
 
 
-def test_load_mismatch_restarts_fresh(tmp_path: Path):
+def test_migrate_dates_preserves_symbols(tmp_path: Path):
+    path = tmp_path / "checkpoint.json"
+    path.write_text(
+        json.dumps(
+            {
+                "timeframe": "1m",
+                "start": "2025-01-01",
+                "end": "2025-12-31",
+                "symbols": {
+                    "MES": {"status": "done", "bars_saved": 0},
+                    "EURUSD": {"status": "done", "bars_saved": 100000},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    cp = CheckpointManager(
+        path,
+        timeframe="1m",
+        start="2024-01-01",
+        end="2025-12-31",
+        symbols=["MES", "EURUSD"],
+    )
+    cp.load()
+    assert cp._data["start"] == "2024-01-01"
+    assert cp._data["end"] == "2025-12-31"
+    assert cp._data["symbols"]["EURUSD"]["bars_saved"] == 100000
+
+
+def test_load_timeframe_mismatch_restarts_fresh(tmp_path: Path):
     path = tmp_path / "checkpoint.json"
     path.write_text(
         json.dumps(
@@ -69,7 +98,7 @@ def test_load_mismatch_restarts_fresh(tmp_path: Path):
                 "timeframe": "5m",
                 "start": "2024-01-01",
                 "end": "2024-12-31",
-                "symbols": {"MES": {"status": "done"}},
+                "symbols": {"MES": {"status": "done", "bars_saved": 1000}},
             }
         ),
         encoding="utf-8",
@@ -83,3 +112,35 @@ def test_load_mismatch_restarts_fresh(tmp_path: Path):
     )
     cp.load()
     assert not cp.is_done("MES")
+
+
+def test_load_date_change_preserves_symbol_progress(tmp_path: Path):
+    path = tmp_path / "checkpoint.json"
+    path.write_text(
+        json.dumps(
+            {
+                "timeframe": "1m",
+                "start": "2025-01-01",
+                "end": "2025-12-31",
+                "symbols": {
+                    "EURUSD": {
+                        "status": "done",
+                        "last_date": "2025-12-31",
+                        "bars_saved": 58910,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    cp = CheckpointManager(
+        path,
+        timeframe="1m",
+        start="2024-01-01",
+        end="2025-12-31",
+        symbols=["EURUSD", "MES"],
+    )
+    cp.load()
+    assert cp._data["start"] == "2024-01-01"
+    assert cp._data["symbols"]["EURUSD"]["bars_saved"] == 58910
+    assert cp._data["symbols"]["MES"]["status"] == "pending"

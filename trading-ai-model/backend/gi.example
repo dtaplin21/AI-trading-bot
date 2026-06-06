@@ -13,11 +13,6 @@ DATABASE_URL=postgresql://trading:trading@localhost:5432/trading_ai
 # PGSSLMODE=require
 # DATABASE_CONNECT_TIMEOUT=30
 
-# Polygon backfill — futures use contract codes (MESH25, …) for BACKFILL year
-# BACKFILL_FUTURES_YEAR=2025
-# BACKFILL_CHUNK_DAYS=10
-# Smaller chunks = smaller DB writes (less stall risk on remote Postgres)
-
 # Data sources
 MARKET_DATA_PROVIDER=
 DATA_STALE_MINUTES=15
@@ -47,11 +42,19 @@ ANTHROPIC_API_KEY=
 ANTHROPIC_MODEL=claude-sonnet-4-20250514
 ANTHROPIC_MAX_TOKENS=350
 
-# Polygon backfill (run once before replay): python scripts/backfill_polygon.py --export-csv
-# BACKFILL_START=2025-01-01
+# Polygon backfill (run once before replay)
+# CSV-only (recommended while downloading — no remote DB stalls):
+#   python scripts/backfill_polygon.py --skip-db --timeframe 1m --start 2025-01-01 --end 2025-12-31 --chunk-days 10
+#   python scripts/backfill_polygon.py --sync-from-storage --status
+#   python scripts/backfill_polygon.py --futures-only --start 2024-01-01 --end 2025-12-31 --chunk-days 10
+# DB + optional CSV: omit --skip-db
+# BACKFILL_START=2024-01-01
 # BACKFILL_END=2025-12-31
 # BACKFILL_TIMEFRAME=1m
-# BACKFILL_EXPORT_CSV=true
+# BACKFILL_SKIP_DB=false
+# BACKFILL_EXPORT_CSV=false
+# BACKFILL_CHUNK_DAYS=10
+# WATCHER_DATA_PATH=data/ohlcv
 POLYGON_API_KEY=
 
 # Paper trading (keep true until you are ready for Coinbase live)

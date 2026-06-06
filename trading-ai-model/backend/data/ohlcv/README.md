@@ -31,3 +31,9 @@ Symbols: MES, NQ, CL, GC, ZB, RTY
 2. TimescaleDB `ohlcv_candles` (requires `DATABASE_URL`; set `WATCHER_REPLAY_TIMEFRAME`, default `1m`)
 
 Default path: `data/ohlcv` (override with `WATCHER_DATA_PATH` in `.env`).
+
+Generate files with Polygon backfill (CSV-only, no DB):
+
+```bash
+python scripts/backfill_polygon.py --skip-db --timeframe 1m --start 2025-01-01 --end 2025-12-31 --chunk-days 10
+```

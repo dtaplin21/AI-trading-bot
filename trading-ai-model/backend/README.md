@@ -25,11 +25,12 @@ Replay reads bars from **TimescaleDB** or `data/ohlcv/*.csv` — it does not cal
 ```bash
 cd backend
 source .venv/bin/activate
-# Uses WATCHER_SYMBOLS, WATCHER_REPLAY_START/END from .env
-python scripts/backfill_polygon.py --export-csv
+# CSV-only (fast, no remote Postgres write stalls):
+python scripts/backfill_polygon.py --skip-db --timeframe 1m --start 2025-01-01 --end 2025-12-31 --chunk-days 10
+# Or DB upsert: omit --skip-db (requires DATABASE_URL)
 ```
 
-Then set `WATCHER_MODE=replay` on the worker and redeploy.
+Replay prefers `data/ohlcv/{SYMBOL}_1m.csv` when present (`WATCHER_DATA_PATH`). Then set `WATCHER_MODE=replay` on the worker and redeploy.
 
 Options: `--symbols MES,BTCUSD --start 2025-01-01 --end 2025-12-31 --timeframe 1m`
 

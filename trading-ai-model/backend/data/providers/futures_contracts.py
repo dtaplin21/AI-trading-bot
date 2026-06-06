@@ -13,7 +13,14 @@ from datetime import datetime, timezone
 from config.symbols import FUTURES_SYMBOLS, get_symbol_or_none
 from data.providers.polygon_backfill import parse_date
 
-# Approximate roll boundaries for 2025 (clip to job start/end).
+# Approximate roll boundaries (clip to job start/end).
+_QUARTERLY_2024: list[tuple[str, str, str]] = [
+    ("H24", "2024-01-01", "2024-03-14"),
+    ("M24", "2024-03-15", "2024-06-14"),
+    ("U24", "2024-06-15", "2024-09-14"),
+    ("Z24", "2024-09-15", "2024-12-31"),
+]
+
 _QUARTERLY_2025: list[tuple[str, str, str]] = [
     ("H25", "2025-01-01", "2025-03-14"),
     ("M25", "2025-03-15", "2025-06-14"),
@@ -21,7 +28,13 @@ _QUARTERLY_2025: list[tuple[str, str, str]] = [
     ("Z25", "2025-09-15", "2025-12-31"),
 ]
 
-# GC uses Feb/Apr/Jun/Aug/Dec (G,J,M,Q,V,Z) — 2025 active windows (Apr contract = J25).
+_GC_2024: list[tuple[str, str, str]] = [
+    ("J24", "2024-01-01", "2024-04-14"),
+    ("M24", "2024-04-15", "2024-06-14"),
+    ("Q24", "2024-06-15", "2024-08-14"),
+    ("Z24", "2024-08-15", "2024-12-31"),
+]
+
 _GC_2025: list[tuple[str, str, str]] = [
     ("J25", "2025-01-01", "2025-04-14"),
     ("M25", "2025-04-15", "2025-06-14"),
@@ -29,25 +42,45 @@ _GC_2025: list[tuple[str, str, str]] = [
     ("Z25", "2025-08-15", "2025-12-31"),
 ]
 
-_CL_MONTH_CODES_2025 = ("F", "G", "H", "J", "K", "M", "N", "Q", "U", "V", "X", "Z")
+_CL_MONTH_CODES = ("F", "G", "H", "J", "K", "M", "N", "Q", "U", "V", "X", "Z")
 _CL_MONTH_ENDS = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
 
-# logical symbol → list of (suffix, start, end) for a calendar year
-_FUTURES_SCHEDULE_2025: dict[str, list[tuple[str, str, str]]] = {
-    "MES": [(f"MES{s}", a, b) for s, a, b in _QUARTERLY_2025],
-    "ES": [(f"ES{s}", a, b) for s, a, b in _QUARTERLY_2025],
-    "NQ": [(f"NQ{s}", a, b) for s, a, b in _QUARTERLY_2025],
-    "MNQ": [(f"MNQ{s}", a, b) for s, a, b in _QUARTERLY_2025],
-    "RTY": [(f"RTY{s}", a, b) for s, a, b in _QUARTERLY_2025],
-    "ZB": [(f"ZB{s}", a, b) for s, a, b in _QUARTERLY_2025],
-    "GC": [(f"GC{s}", a, b) for s, a, b in _GC_2025],
-    "CL": [
-        (f"CL{code}25", f"2025-{m:02d}-01", f"2025-{m:02d}-{_CL_MONTH_ENDS[m - 1]:02d}")
-        for m, code in enumerate(_CL_MONTH_CODES_2025, start=1)
-    ],
-}
 
-SUPPORTED_FUTURES_BACKFILL_YEARS: frozenset[int] = frozenset({2025})
+def _quarterly_schedule(prefix: str, year: int) -> list[tuple[str, str, str]]:
+    quarters = _QUARTERLY_2024 if year == 2024 else _QUARTERLY_2025
+    yy = str(year)[-2:]
+    return [(f"{prefix}{s}", a, b) for s, a, b in quarters]
+
+
+def _gc_schedule(year: int) -> list[tuple[str, str, str]]:
+    raw = _GC_2024 if year == 2024 else _GC_2025
+    return [(f"GC{s}", a, b) for s, a, b in raw]
+
+
+def _cl_schedule(year: int) -> list[tuple[str, str, str]]:
+    yy = str(year)[-2:]
+    return [
+        (f"CL{code}{yy}", f"{year}-{m:02d}-01", f"{year}-{m:02d}-{_CL_MONTH_ENDS[m - 1]:02d}")
+        for m, code in enumerate(_CL_MONTH_CODES, start=1)
+    ]
+
+
+def _schedule_for_year(year: int) -> dict[str, list[tuple[str, str, str]]]:
+    if year not in SUPPORTED_FUTURES_BACKFILL_YEARS:
+        return {}
+    return {
+        "MES": _quarterly_schedule("MES", year),
+        "ES": _quarterly_schedule("ES", year),
+        "NQ": _quarterly_schedule("NQ", year),
+        "MNQ": _quarterly_schedule("MNQ", year),
+        "RTY": _quarterly_schedule("RTY", year),
+        "ZB": _quarterly_schedule("ZB", year),
+        "GC": _gc_schedule(year),
+        "CL": _cl_schedule(year),
+    }
+
+
+SUPPORTED_FUTURES_BACKFILL_YEARS: frozenset[int] = frozenset({2024, 2025})
 
 
 @dataclass(frozen=True)
@@ -66,6 +99,12 @@ def contract_to_polygon_ticker(contract_code: str) -> str:
     return contract_code.upper()
 
 
+def job_years(job_start: datetime, job_end: datetime) -> list[int]:
+    start_y = job_start.year
+    end_y = job_end.year
+    return [y for y in range(start_y, end_y + 1) if y in SUPPORTED_FUTURES_BACKFILL_YEARS]
+
+
 def uses_futures_contract_roll(symbol: str, year: int) -> bool:
     sym = symbol.upper()
     return (
@@ -75,10 +114,8 @@ def uses_futures_contract_roll(symbol: str, year: int) -> bool:
     )
 
 
-def _schedule_for_year(year: int) -> dict[str, list[tuple[str, str, str]]]:
-    if year == 2025:
-        return _FUTURES_SCHEDULE_2025
-    return {}
+def uses_futures_contract_roll_for_job(symbol: str, job_start: datetime, job_end: datetime) -> bool:
+    return any(uses_futures_contract_roll(symbol, year) for year in job_years(job_start, job_end))
 
 
 def get_contract_windows(
@@ -120,6 +157,19 @@ def get_contract_windows(
                 end=clip_end,
             )
         )
+    return windows
+
+
+def get_contract_windows_for_job(
+    symbol: str,
+    job_start: datetime,
+    job_end: datetime,
+) -> list[FuturesContractWindow]:
+    """All contract windows across years in [job_start, job_end], sorted by start."""
+    windows: list[FuturesContractWindow] = []
+    for year in job_years(job_start, job_end):
+        windows.extend(get_contract_windows(symbol, year, job_start, job_end))
+    windows.sort(key=lambda w: w.start)
     return windows
 
 

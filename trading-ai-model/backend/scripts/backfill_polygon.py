@@ -8,11 +8,18 @@ Re-run the same command to continue after Ctrl+C, rate limits, or crashes.
 Usage (from backend/):
   python scripts/backfill_polygon.py --timeframe 1m --start 2025-01-01 --end 2025-12-31
   python scripts/backfill_polygon.py --status
+  python scripts/backfill_polygon.py --sync-from-storage --status
+  python scripts/backfill_polygon.py --futures-only --start 2024-01-01 --end 2025-12-31
   python scripts/backfill_polygon.py --reset --timeframe 1m --start 2025-01-01 --end 2025-12-31
+
+  # CSV-only (no DB writes — avoids remote Postgres stalls during download):
+  python scripts/backfill_polygon.py --skip-db --timeframe 1m --start 2025-01-01 --end 2025-12-31 --chunk-days 10
+  # Replay reads CSV first: WATCHER_DATA_PATH=data/ohlcv
 
 Env:
   POLYGON_API_KEY          required
   DATABASE_URL             required for DB upsert (unless --skip-db)
+  BACKFILL_SKIP_DB         if true, same as --skip-db (CSV-only)
   BACKFILL_CHECKPOINT      default data/backfill_checkpoint.json
   BACKFILL_RATE_SLEEP      seconds on 429 (default 65)
   BACKFILL_CHUNK_DAYS      default 30 (use 10 for remote Postgres / large 1m writes)
@@ -45,10 +52,12 @@ from config.env_resolve import is_env_placeholder, resolve_env
 from config.symbols import FUTURES_SYMBOLS
 from config.watchlist import watcher_symbols_from_env
 from data.providers.backfill_checkpoint import CheckpointManager
+from data.providers.storage_checkpoint_sync import sync_checkpoint_from_storage
 from data.providers.futures_contracts import (
-    get_contract_windows,
+    get_contract_windows_for_job,
     infer_backfill_year,
-    uses_futures_contract_roll,
+    job_years,
+    uses_futures_contract_roll_for_job,
 )
 from data.providers.polygon_backfill import (
     PolygonBackfillClient,
@@ -90,7 +99,7 @@ def _parse_args() -> argparse.Namespace:
         "--export-csv",
         action="store_true",
         default=os.getenv("BACKFILL_EXPORT_CSV", "false").lower() in ("true", "1", "yes"),
-        help="Also write data/ohlcv/{SYMBOL}_{tf}.csv",
+        help="Write data/ohlcv/{SYMBOL}_{tf}.csv (forced on when --skip-db)",
     )
     p.add_argument(
         "--chunk-days",
@@ -101,7 +110,12 @@ def _parse_args() -> argparse.Namespace:
         "--data-path",
         default=os.getenv("WATCHER_DATA_PATH", "data/ohlcv"),
     )
-    p.add_argument("--skip-db", action="store_true", help="CSV export only")
+    p.add_argument(
+        "--skip-db",
+        action="store_true",
+        default=os.getenv("BACKFILL_SKIP_DB", "false").lower() in ("true", "1", "yes"),
+        help="CSV-only: skip TimescaleDB writes (enables --export-csv automatically)",
+    )
     p.add_argument(
         "--checkpoint",
         default=os.getenv("BACKFILL_CHECKPOINT", str(DEFAULT_CHECKPOINT)),
@@ -118,7 +132,27 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="With --redo-futures: only reset futures done with 0 bars_saved",
     )
+    p.add_argument(
+        "--futures-only",
+        action="store_true",
+        help="Backfill only CME futures (MES, ES, NQ, …) — skips forex/crypto/equity",
+    )
     p.add_argument("--status", action="store_true", help="Show progress and exit")
+    p.add_argument(
+        "--sync-from-storage",
+        action="store_true",
+        help="Reconcile checkpoint from data/ohlcv CSV + TimescaleDB (use with --status)",
+    )
+    p.add_argument(
+        "--sync-from-csv",
+        action="store_true",
+        help="Alias for --sync-from-storage",
+    )
+    p.add_argument(
+        "--sync-csv-only",
+        action="store_true",
+        help="With storage sync: CSV files only (skip DB)",
+    )
     p.add_argument(
         "--futures-year",
         type=int,
@@ -217,16 +251,18 @@ def _run_futures_symbol(
         logger.info("%s already complete — skipping", sym)
         return True, 0
 
-    windows = get_contract_windows(sym, futures_year, job_start, job_end)
+    windows = get_contract_windows_for_job(sym, job_start, job_end)
     if not windows:
-        logger.warning("%s: no futures contract schedule for %s", sym, futures_year)
+        years = job_years(job_start, job_end)
+        logger.warning("%s: no futures contract schedule for years %s", sym, years)
         return False, 0
 
+    year_label = ",".join(str(y) for y in job_years(job_start, job_end))
     logger.info(
         "Backfilling %s using %d futures contracts (%s) from %s",
         sym,
         len(windows),
-        futures_year,
+        year_label,
         resume,
     )
 
@@ -291,7 +327,7 @@ def _run_symbol(
     data_path: Path,
 ) -> tuple[bool, int]:
     """Backfill one symbol from checkpoint resume point. Returns (ok, bars_added)."""
-    if uses_futures_contract_roll(sym, futures_year):
+    if uses_futures_contract_roll_for_job(sym, job_start, job_end):
         return _run_futures_symbol(
             sym,
             client=client,
@@ -339,11 +375,25 @@ def _run_symbol(
     return True, sym_bars
 
 
-def main() -> int:
-    args = _parse_args()
+def _resolve_symbols(args: argparse.Namespace) -> list[str]:
+    if args.futures_only:
+        return list(FUTURES_SYMBOLS)
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
     if not symbols:
         symbols = watcher_symbols_from_env()
+    return symbols
+
+
+def _symbols_for_sync(checkpoint: CheckpointManager, run_symbols: list[str]) -> list[str]:
+    """Include checkpoint keys so completed forex/crypto rows are restored from storage."""
+    keys = {s.upper() for s in run_symbols}
+    keys |= {k.upper() for k in checkpoint._data.get("symbols", {})}
+    return sorted(keys)
+
+
+def main() -> int:
+    args = _parse_args()
+    symbols = _resolve_symbols(args)
 
     checkpoint_path = Path(args.checkpoint)
     if not checkpoint_path.is_absolute():
@@ -373,8 +423,29 @@ def main() -> int:
                 "(use --redo-futures without --redo-futures-zero-only to force all futures)"
             )
 
+    data_path = Path(args.data_path)
+    if not data_path.is_absolute():
+        data_path = _BACKEND / data_path
+
+    if args.sync_from_storage or args.sync_from_csv:
+        store: TimescaleStore | None = None
+        if not args.sync_csv_only:
+            store = TimescaleStore()
+        sync_checkpoint_from_storage(
+            checkpoint,
+            data_path,
+            timeframe=args.timeframe,
+            symbols=_symbols_for_sync(checkpoint, symbols),
+            store=store,
+            use_csv=True,
+            use_db=not args.sync_csv_only,
+        )
+
     if args.status:
         checkpoint.print_status()
+        return 0
+
+    if args.sync_from_storage or args.sync_from_csv:
         return 0
 
     polygon_key = resolve_env("POLYGON_API_KEY")
@@ -395,18 +466,29 @@ def main() -> int:
 
     futures_year = args.futures_year or infer_backfill_year(args.start, args.end)
 
+    if args.skip_db:
+        args.export_csv = True
+
     client = PolygonBackfillClient(api_key=polygon_key)
     store: TimescaleStore | None = None
-    if not args.skip_db:
+    if args.skip_db:
+        data_path.mkdir(parents=True, exist_ok=True)
+        logger.info(
+            "CSV-only mode — skipping DB | export → %s/{SYMBOL}_%s.csv",
+            data_path,
+            args.timeframe,
+        )
+    else:
         store = TimescaleStore()
         if not store.available:
-            logger.error("DATABASE_URL unavailable — use --skip-db for CSV only")
+            logger.error(
+                "DATABASE_URL unavailable — re-run with --skip-db for CSV-only backfill"
+            )
             return 1
         logger.info("TimescaleDB connected — upserting to ohlcv_candles")
-
-    data_path = Path(args.data_path)
-    if not data_path.is_absolute():
-        data_path = _BACKEND / data_path
+        if args.export_csv:
+            data_path.mkdir(parents=True, exist_ok=True)
+            logger.info("Also exporting CSV → %s", data_path)
 
     logger.info(
         "Backfill %s → %s | timeframe=%s | %d symbols | futures_year=%s | checkpoint=%s",
