@@ -8,6 +8,7 @@ from typing import Optional
 from learning.runtime import get_learning_agent
 from paper_trading.paper_ledger import PaperLedger
 from paper_trading.position_book import OpenPosition, get_position_book
+from risk.correlation_checker import get_correlation_checker
 from risk.risk_runtime import get_risk_engine
 
 logger = logging.getLogger(__name__)
@@ -28,14 +29,33 @@ class PaperTrader:
         action = signal.get("action", "")
         direction = "long" if "long" in action else "short" if "short" in action else "long"
         entry = float(signal.get("entry") or 0)
+        symbol = str(signal.get("symbol", "MES")).upper()
         book = get_position_book()
+
+        corr = get_correlation_checker().check(symbol, book.open_symbols())
+        if not corr["allowed"]:
+            logger.warning(
+                "PaperTrader: rejected %s — %s",
+                symbol,
+                corr["reason"],
+            )
+            return {
+                "status": "rejected",
+                "reason": corr["reason"],
+                "correlation": corr,
+                "signal": signal,
+            }
+
+        base_qty = max(1, int(signal.get("size") or 1))
+        quantity = max(1, int(base_qty * float(corr.get("size_factor", 1.0))))
+
         pos = book.open_position(
-            symbol=signal.get("symbol", "MES"),
+            symbol=symbol,
             direction=direction,
             entry_price=entry,
             stop_loss=float(signal.get("stop") or entry),
             take_profit=float(signal.get("target") or entry),
-            quantity=max(1, int(signal.get("size") or 1)),
+            quantity=quantity,
             broker="paper",
             signal_rank=int(signal.get("signal_rank") or 0),
             snapshot_id=str(signal.get("snapshot_id") or ""),

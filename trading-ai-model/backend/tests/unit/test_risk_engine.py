@@ -6,6 +6,7 @@ import pytest
 
 from pipeline.confluence_report import ConfluenceReport
 from pipeline.schemas import FusedFeatureSet, TradeAction, TradePlan
+from paper_trading.position_book import reset_position_book
 from risk.risk_engine import PortfolioState, RiskEngine
 
 
@@ -60,6 +61,7 @@ def test_approves_valid_signal():
 
 
 def test_kill_switch_rejects(monkeypatch):
+    reset_position_book()
     monkeypatch.setenv("RISK_KILL_SWITCH", "true")
     engine = RiskEngine()
     result = engine.approve(
@@ -77,6 +79,7 @@ def test_kill_switch_rejects(monkeypatch):
 
 
 def test_approve_passes_valid_trade():
+    reset_position_book()
     engine = RiskEngine()
     result = engine.approve(
         plan=_plan(),
@@ -91,7 +94,34 @@ def test_approve_passes_valid_trade():
     assert result.position_size_contracts >= 1
 
 
+def test_rejects_correlated_open_position():
+    reset_position_book()
+    from paper_trading.position_book import get_position_book
+
+    get_position_book().open_position(
+        symbol="NQ",
+        direction="long",
+        entry_price=19000.0,
+        stop_loss=18950.0,
+        take_profit=19100.0,
+        quantity=1,
+    )
+    engine = RiskEngine()
+    result = engine.approve(
+        plan=_plan(),
+        fused=_fused(),
+        confluence=_confluence(),
+        p_success=0.70,
+        ev_dollars=10.0,
+        sample_size=500,
+        signal_rank=75,
+    )
+    assert result.approved is False
+    assert any("correlation" in r.lower() for r in result.rejection_reasons)
+
+
 def test_rejects_wait_action():
+    reset_position_book()
     engine = RiskEngine()
     result = engine.approve(
         plan=_plan(action=TradeAction.WAIT),

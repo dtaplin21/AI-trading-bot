@@ -7,6 +7,27 @@ import numpy as np
 import pandas as pd
 
 from data.storage.feature_store import get_feature_store
+from ml.features import (
+    candlestick_features,
+    elliott_features,
+    fibonacci_features,
+    fractal_features,
+    gann_features,
+    harmonic_features,
+    markov_features,
+    number_theory_features,
+)
+
+TIER4_EXTRACTORS = (
+    candlestick_features.extract,
+    fibonacci_features.extract,
+    fractal_features.extract,
+    gann_features.extract,
+    harmonic_features.extract,
+    elliott_features.extract,
+    markov_features.extract,
+    number_theory_features.extract,
+)
 
 
 def _ema(series: pd.Series, span: int) -> pd.Series:
@@ -93,6 +114,9 @@ class FeaturePipeline:
             returns = close.pct_change().dropna()
             if len(returns) >= 5:
                 features["volatility_5"] = float(returns.tail(5).std())
+
+            for extract_fn in TIER4_EXTRACTORS:
+                features = extract_fn(ohlcv, features)
 
         if symbol and timestamp is not None:
             store.set_features(symbol, timeframe, timestamp, features)

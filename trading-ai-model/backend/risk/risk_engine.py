@@ -33,8 +33,18 @@ from config.agent_config import TRADING_PHILOSOPHY
 from pipeline.confluence_report import ConfluenceReport
 from pipeline.probability_gate import ProbabilityGate
 from pipeline.schemas import FusedFeatureSet, RiskDecision, TradeAction, TradePlan
+from risk.correlation_checker import get_correlation_checker
 
 logger = logging.getLogger(__name__)
+
+
+def _open_position_symbols() -> list[str]:
+    try:
+        from paper_trading.position_book import get_position_book
+
+        return get_position_book().open_symbols()
+    except Exception:
+        return []
 
 
 def _env_float(key: str, default: float) -> float:
@@ -185,6 +195,7 @@ class RiskEngine:
         self._consecutive_losses = 0
         self._open_positions = 0
         self._gate = ProbabilityGate()
+        self._correlation = get_correlation_checker()
 
         daily_desc = (
             f"${self._max_daily_loss_usd:.0f}/day"
@@ -280,8 +291,32 @@ class RiskEngine:
         if plan.action in (TradeAction.DO_NOTHING, TradeAction.WAIT):
             rejections.append("Plan action is DO_NOTHING or WAIT — no trade.")
 
+        correlation_factor = 1.0
+        corr_result = self._correlation.check(plan.symbol, _open_position_symbols())
+        if not corr_result["allowed"]:
+            rejections.append(corr_result["reason"])
+        else:
+            correlation_factor = float(corr_result.get("size_factor", 1.0))
+            if correlation_factor < 1.0:
+                logger.info(
+                    "RiskEngine: correlation sizing [%s] factor=%.2f (%s)",
+                    plan.symbol,
+                    correlation_factor,
+                    corr_result.get("reason", ""),
+                )
+
         approved = len(rejections) == 0
-        contracts = self._size_position(p_success, ev_dollars, current_dd, remaining_pct) if approved else 0
+        contracts = (
+            self._size_position(
+                p_success,
+                ev_dollars,
+                current_dd,
+                remaining_pct,
+                correlation_factor=correlation_factor,
+            )
+            if approved
+            else 0
+        )
         max_notional = 0.0
         if _env_optional_float("RISK_ACCOUNT_CAP_USD") is not None or self._max_order_notional:
             max_order = self._max_order_notional or (self._account_cap_usd * 0.1)
@@ -402,6 +437,7 @@ class RiskEngine:
         ev_dollars: float,
         current_dd: float,
         remaining_daily: float,
+        correlation_factor: float = 1.0,
     ) -> int:
         base = self._max_contracts
 
@@ -418,6 +454,9 @@ class RiskEngine:
 
         if self._consecutive_losses >= 2:
             base = max(1, base - 1)
+
+        factor = max(0.25, min(1.0, correlation_factor))
+        base = max(1, int(base * factor)) if factor < 1.0 else base
 
         return min(base, self._max_contracts)
 

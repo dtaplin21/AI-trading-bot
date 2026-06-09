@@ -215,6 +215,10 @@ class PositionBook:
         with self._lock:
             return len(self._positions)
 
+    def open_symbols(self) -> list[str]:
+        with self._lock:
+            return sorted({p.symbol for p in self._positions.values()})
+
 
 _book: PositionBook | None = None
 
@@ -223,6 +227,15 @@ def get_position_book() -> PositionBook:
     global _book
     if _book is None:
         _book = PositionBook()
+        _seed_demo_positions(_book)
+    return _book
+
+
+def reset_position_book(*, seed_demo: bool = False) -> PositionBook:
+    """Reset global book (tests). Optionally seed dashboard demo positions."""
+    global _book
+    _book = PositionBook()
+    if seed_demo:
         _seed_demo_positions(_book)
     return _book
 
