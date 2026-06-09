@@ -13,7 +13,7 @@ class HarmonicAgent(BaseMethodAgent):
     def __init__(self):
         self.service = HarmonicPatternService()
 
-    def analyze(self, symbol, ohlcv, swings, historical_sample_size):
+    def analyze(self, symbol, ohlcv, swings, historical_sample_size, shared_features=None):
         swing_tuples = [(i, p) for i, p in swings] if swings else []
         if len(swing_tuples) < 5:
             idx = list(range(len(ohlcv)))

@@ -13,7 +13,7 @@ class FractalAgent(BaseMethodAgent):
     def __init__(self):
         self.service = FractalService()
 
-    def analyze(self, symbol, ohlcv, swings, historical_sample_size):
+    def analyze(self, symbol, ohlcv, swings, historical_sample_size, shared_features=None):
         result = self.service.detect(ohlcv)
         return MethodOutput(
             method=self.method_name,

@@ -13,7 +13,7 @@ class ElliottWaveAgent(BaseMethodAgent):
     def __init__(self):
         self.service = ElliottWaveService()
 
-    def analyze(self, symbol, ohlcv, swings, historical_sample_size):
+    def analyze(self, symbol, ohlcv, swings, historical_sample_size, shared_features=None):
         result = self.service.analyze(ohlcv)
         return MethodOutput(
             method=self.method_name,

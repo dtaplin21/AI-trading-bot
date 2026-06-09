@@ -24,7 +24,13 @@ class BaseMethodAgent(BaseAgent):
             return ctx
 
         try:
-            output = self.analyze(ctx.symbol, ctx.ohlcv, ctx.swings, ctx.historical_sample_size)
+            output = self.analyze(
+                ctx.symbol,
+                ctx.ohlcv,
+                ctx.swings,
+                ctx.historical_sample_size,
+                shared_features=ctx.metadata.get("shared_features") or {},
+            )
             ctx.method_outputs.append(output)
         except Exception as exc:
             ctx.method_outputs.append(
@@ -43,5 +49,6 @@ class BaseMethodAgent(BaseAgent):
         ohlcv: pd.DataFrame,
         swings: list[tuple[int, float]],
         historical_sample_size: int,
+        shared_features: dict | None = None,
     ) -> MethodOutput:
         ...

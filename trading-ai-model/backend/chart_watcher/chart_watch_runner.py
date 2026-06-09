@@ -20,6 +20,7 @@ Env vars:
   WATCHER_REPLAY_TIMEFRAME  bar timeframe for DB replay (default 1m)
   WATCHER_REPLAY_DB_LIMIT   max bars per symbol from Timescale (default 500000)
   WATCHER_BAR_INTERVAL   seconds between candle polls in live mode (default 60)
+  TICK_STREAM_MODE       broker | websocket | rest — live data source (default broker)
   WATCHER_LOG_BARS       true|false — log every bar received (default false)
 """
 from __future__ import annotations
@@ -142,6 +143,7 @@ class ChartWatchRunner:
         self._broker_adapter = None
         self._timescale: TimescaleStore | None = None
         self._timeseries: TimeseriesStore | None = None
+        self._tick_loaders: list = []
 
         logger.info(
             "ChartWatchRunner: mode=%s | symbols=%s | timeframes=%s",
@@ -190,6 +192,8 @@ class ChartWatchRunner:
 
     async def stop(self) -> None:
         self._running = False
+        for loader in self._tick_loaders:
+            loader.stop()
         await self._stop_news()
         logger.info("ChartWatchRunner: stop requested")
 
@@ -474,6 +478,11 @@ class ChartWatchRunner:
             yield bar
 
     async def _run_live(self) -> None:
+        tick_mode = os.getenv("TICK_STREAM_MODE", "broker").strip().lower()
+        if tick_mode in ("websocket", "rest"):
+            await self._run_live_ticks(tick_mode)
+            return
+
         from live.broker_adapter import get_broker_adapter
 
         broker = os.getenv("BROKER", "none").lower()
@@ -505,6 +514,44 @@ class ChartWatchRunner:
                 await asyncio.gather(*tasks, return_exceptions=True)
 
             await asyncio.sleep(BAR_INTERVAL)
+
+    async def _run_live_ticks(self, tick_mode: str) -> None:
+        """Live mode via Polygon tick stream → BarAssembler.on_tick → pipeline."""
+        from data.loaders.tick_data_loader import loaders_for_symbols
+
+        self._tick_loaders = loaders_for_symbols(SYMBOLS)
+        if not self._tick_loaders:
+            logger.error("ChartWatchRunner: no tick loaders for symbols=%s", SYMBOLS)
+            return
+
+        logger.info(
+            "ChartWatchRunner: LIVE tick mode | source=%s | loaders=%d",
+            tick_mode,
+            len(self._tick_loaders),
+        )
+
+        async def consume(loader) -> None:
+            async for tick in loader.stream():
+                if not self._running:
+                    break
+                sym = tick.symbol.upper()
+                if sym not in self._assembler.symbols():
+                    continue
+                if not self._scheduler.is_trading(sym):
+                    continue
+                asm = self._assembler.get(sym)
+                if not asm:
+                    continue
+                completed = await asm.on_tick(tick.price, tick.size, tick.timestamp)
+                for bar in completed:
+                    self._bars_processed[sym] = self._bars_processed.get(sym, 0) + 1
+
+        tasks = [asyncio.create_task(consume(loader)) for loader in self._tick_loaders]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            for loader in self._tick_loaders:
+                loader.stop()
 
     async def _poll_symbol(self, symbol: str, broker: str) -> None:
         bar = await self._fetch_live_candle(symbol, broker)

@@ -52,6 +52,8 @@ from pipeline.schemas import (
     TradePlan,
 )
 from pipeline.session_probability_manager import SessionProbabilityManager, SessionSetup
+from data.storage.feature_store import get_feature_store
+from ml.features.feature_pipeline import FeaturePipeline
 from pipeline.world_state_runtime import get_world_state_store
 from risk.risk_engine import PortfolioState, RiskEngine
 from validation.method_isolation.method_isolation_validator import MethodEdgeRegistry
@@ -111,6 +113,8 @@ class TradingPipelineSupervisor:
             watched_symbols=[self.symbol],
             watched_timeframes=[self.timeframe],
         )
+        self._feature_pipeline = FeaturePipeline()
+        self._feature_store = get_feature_store()
 
         logger.info(
             "Supervisor WIRED | %s %s | paper=%s | news=%s | kill=%s",
@@ -152,6 +156,17 @@ class TradingPipelineSupervisor:
             if portfolio:
                 self._risk_eng.sync_portfolio(portfolio)
 
+            tf = bar.timeframe or self.timeframe
+            shared = self._feature_pipeline.build(
+                {
+                    "symbol": self.symbol,
+                    "timeframe": tf,
+                    "timestamp": ctx.timestamp,
+                    "ohlcv": merged,
+                }
+            )
+            ctx.metadata["shared_features"] = shared
+
             await asyncio.to_thread(self._chart.run, ctx)
             await self._run_methods_concurrent(ctx)
 
@@ -164,6 +179,9 @@ class TradingPipelineSupervisor:
             fused = self._fusion.build_from_context(ctx)
             result.fused = fused
             fused.signal_rank = self._compute_signal_rank(fused, result.confluence)
+
+            fused_payload = fused.model_dump() if hasattr(fused, "model_dump") else dict(fused)
+            self._feature_store.set_signal(self.symbol, tf, ctx.timestamp, fused_payload)
 
             if not result.confluence.ready_for_prediction:
                 result.audit = self._build_audit(result)

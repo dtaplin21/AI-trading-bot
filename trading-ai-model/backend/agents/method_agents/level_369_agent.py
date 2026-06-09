@@ -15,7 +15,7 @@ class Level369Agent(BaseMethodAgent):
         self.detector = Level369Detector()
         self.service = NumberTheoryService()
 
-    def analyze(self, symbol, ohlcv, swings, historical_sample_size):
+    def analyze(self, symbol, ohlcv, swings, historical_sample_size, shared_features=None):
         price = float(ohlcv["close"].iloc[-1])
         anchor = float(ohlcv["close"].max())
         levels = self.detector.levels(anchor)

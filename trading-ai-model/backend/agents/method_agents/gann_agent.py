@@ -13,7 +13,7 @@ class GannAgent(BaseMethodAgent):
     def __init__(self):
         self.service = GannGeometryService()
 
-    def analyze(self, symbol, ohlcv, swings, historical_sample_size):
+    def analyze(self, symbol, ohlcv, swings, historical_sample_size, shared_features=None):
         result = self.service.analyze(ohlcv, historical_sample_size, baseline_beats_random=False)
         return MethodOutput(
             method=self.method_name,

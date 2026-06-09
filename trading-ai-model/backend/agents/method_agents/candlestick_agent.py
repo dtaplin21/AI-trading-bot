@@ -15,7 +15,7 @@ class CandlestickAgent(BaseMethodAgent):
         self.candles = CandlestickPsychologyService()
         self.wicks = WickAnalysisService()
 
-    def analyze(self, symbol, ohlcv, swings, historical_sample_size):
+    def analyze(self, symbol, ohlcv, swings, historical_sample_size, shared_features=None):
         psych = self.candles.analyze(ohlcv)
         wick = self.wicks.analyze(ohlcv)
         bullish_rejection = psych.lower_wick_ratio > 0.5 and psych.rejection_score > 0.4

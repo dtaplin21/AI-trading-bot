@@ -9,7 +9,7 @@ from agents.schemas import MethodOutput
 class BalanceLineAgent(BaseMethodAgent):
     method_name = "balance_line"
 
-    def analyze(self, symbol, ohlcv, swings, historical_sample_size):
+    def analyze(self, symbol, ohlcv, swings, historical_sample_size, shared_features=None):
         close = ohlcv["close"]
         mid = (float(close.max()) + float(close.min())) / 2
         price = float(close.iloc[-1])

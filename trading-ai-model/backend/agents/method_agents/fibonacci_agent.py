@@ -15,7 +15,7 @@ class FibonacciAgent(BaseMethodAgent):
         self.fib = FibonacciService()
         self.spiral = SacredGeometryService()
 
-    def analyze(self, symbol, ohlcv, swings, historical_sample_size):
+    def analyze(self, symbol, ohlcv, swings, historical_sample_size, shared_features=None):
         high, low = float(ohlcv["high"].max()), float(ohlcv["low"].min())
         price = float(ohlcv["close"].iloc[-1])
         nearest = self.fib.nearest_level(price, high, low)

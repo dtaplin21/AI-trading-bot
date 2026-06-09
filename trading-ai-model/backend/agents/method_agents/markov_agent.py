@@ -15,7 +15,7 @@ class MarkovAgent(BaseMethodAgent):
         self.markov = MarkovChainService()
         self.regime = RegimeClassifier()
 
-    def analyze(self, symbol, ohlcv, swings, historical_sample_size):
+    def analyze(self, symbol, ohlcv, swings, historical_sample_size, shared_features=None):
         close = ohlcv["close"]
         returns = close.pct_change().dropna()
         vol = float(returns.std()) if len(returns) else 0.01

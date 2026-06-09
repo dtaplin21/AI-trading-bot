@@ -10,12 +10,15 @@ from agents.schemas import MethodOutput
 class MomentumAgent(BaseMethodAgent):
     method_name = "momentum"
 
-    def analyze(self, symbol, ohlcv, swings, historical_sample_size):
+    def analyze(self, symbol, ohlcv, swings, historical_sample_size, shared_features=None):
+        shared = shared_features or {}
         close = ohlcv["close"].values
         returns = np.diff(close) / (close[:-1] + 1e-9)
         momentum = float(np.mean(returns[-5:])) if len(returns) >= 5 else 0.0
         accel = float(np.mean(np.diff(returns[-6:]))) if len(returns) >= 6 else 0.0
-        vol = float(ohlcv["volume"].iloc[-5:].mean()) if "volume" in ohlcv else 0.0
+        vol = float(shared.get("volume_sma_20") or 0.0)
+        if vol <= 0 and "volume" in ohlcv:
+            vol = float(ohlcv["volume"].iloc[-5:].mean())
         vol_shift = min(1.0, vol / (ohlcv["volume"].mean() + 1e-9)) if "volume" in ohlcv else 0.5
         return MethodOutput(
             method=self.method_name,

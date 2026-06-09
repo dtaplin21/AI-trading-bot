@@ -18,7 +18,7 @@ class StrategyMathAgent(BaseMethodAgent):
         self.ror = RiskOfRuinCalculator()
         self.sharpe = SharpeCalculator()
 
-    def analyze(self, symbol, ohlcv, swings, historical_sample_size):
+    def analyze(self, symbol, ohlcv, swings, historical_sample_size, shared_features=None):
         returns = ohlcv["close"].pct_change().dropna().values
         win_rate = float(np.mean(returns > 0)) if len(returns) else 0.5
         avg_win = float(returns[returns > 0].mean()) if np.any(returns > 0) else 0.01

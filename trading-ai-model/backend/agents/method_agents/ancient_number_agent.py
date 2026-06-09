@@ -15,7 +15,7 @@ class AncientNumberAgent(BaseMethodAgent):
         self.cycles = BiblicalCycleService()
         self.opposition = OppositionReflectionService()
 
-    def analyze(self, symbol, ohlcv, swings, historical_sample_size):
+    def analyze(self, symbol, ohlcv, swings, historical_sample_size, shared_features=None):
         bar_index = len(ohlcv)
         price = float(ohlcv["close"].iloc[-1])
         pivot = float(ohlcv["close"].mean())
