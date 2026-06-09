@@ -99,35 +99,12 @@ ALL_SYMBOLS = list(SYMBOL_ASSET_CLASS.keys())
 # ─── Database ─────────────────────────────────────────────────────────────────
 
 
-def get_db_connection():
-    from config.settings import get_settings
-    from data.storage.pg_connect import connect_psycopg2
-
-    url = (get_settings().database_url or os.getenv("DATABASE_URL", "")).strip()
-    if not url:
-        raise ValueError("DATABASE_URL not set")
-    return connect_psycopg2(url)
-
-
 def load_bars(symbol: str, start: str, end: str) -> pd.DataFrame:
-    conn = get_db_connection()
-    query = """
-        SELECT time, open, high, low, close, volume
-        FROM ohlcv_candles
-        WHERE symbol = %s AND timeframe = '1m'
-          AND time >= %s AND time <= %s
-        ORDER BY time ASC
-    """
-    try:
-        df = pd.read_sql(query, conn, params=(symbol, start, end))
-    finally:
-        conn.close()
+    from data.storage.timeseries_store import TimeseriesStore
 
+    df = TimeseriesStore().read(symbol, "1m", start=start, end=end)
     if df.empty:
         return df
-
-    df["time"] = pd.to_datetime(df["time"], utc=True)
-    df = df.set_index("time")
 
     df_5m = (
         df.resample("5min")

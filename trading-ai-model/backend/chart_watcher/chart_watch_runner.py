@@ -43,6 +43,7 @@ from config.watchlist import watcher_symbols_from_env, watcher_timeframes_from_e
 from pipeline.feature_fusion_news_patch import NewsAgentProtocol
 from pipeline.schemas import OHLCV
 from data.storage.timescale_store import TimescaleStore
+from data.storage.timeseries_store import TimeseriesStore
 from pipeline.trading_supervisor import TradingPipelineSupervisor
 
 logger = logging.getLogger(__name__)
@@ -140,6 +141,7 @@ class ChartWatchRunner:
         self._last_live_bar_ts: dict[str, datetime] = {}
         self._broker_adapter = None
         self._timescale: TimescaleStore | None = None
+        self._timeseries: TimeseriesStore | None = None
 
         logger.info(
             "ChartWatchRunner: mode=%s | symbols=%s | timeframes=%s",
@@ -212,6 +214,39 @@ class ChartWatchRunner:
         if self._timescale is None:
             self._timescale = TimescaleStore()
         return self._timescale
+
+    def _series_store(self) -> TimeseriesStore:
+        if self._timeseries is None:
+            self._timeseries = TimeseriesStore()
+        return self._timeseries
+
+    def _persist_bar(self, bar: OHLCV) -> None:
+        """Upsert completed bar to ohlcv_candles (1m source bars only)."""
+        if bar.timeframe != "1m":
+            return
+        store = self._series_store()
+        if not store.available:
+            return
+        ts = bar.timestamp
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        try:
+            store.write_bar(
+                symbol=bar.symbol,
+                timeframe="1m",
+                time=ts,
+                open_=bar.open,
+                high=bar.high,
+                low=bar.low,
+                close=bar.close,
+                volume=bar.volume,
+            )
+        except Exception as exc:
+            logger.warning(
+                "ChartWatchRunner[%s]: failed to persist bar: %s",
+                bar.symbol,
+                exc,
+            )
 
     async def _process_symbol_file(self, symbol: str) -> None:
         count = 0
@@ -537,6 +572,8 @@ class ChartWatchRunner:
                 bar.close,
                 bar.volume,
             )
+
+        self._persist_bar(bar)
 
         sup = self._supervisors.get(bar.symbol)
         asm = self._assembler.get(bar.symbol)

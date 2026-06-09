@@ -100,3 +100,16 @@ Returns full `PipelineDecision` + `llm_explanation` when LLM enabled.
 | LightGBM | `ml/models/lightgbm_classifier.py` | Falls back to rules if no model |
 | Retrain pipeline | `agents/learning/retrain_pipeline.py` | Daily schedule (RETRAIN_SCHEDULE_DAYS=1), manual promote |
 | LLM explainer | `agents/llm_explainer.py` | Explanation only, never executes |
+
+## Stub implementation roadmap
+
+Many modules are scaffolds (docstring-only, passthrough, or hardcoded). **Start with the data layer (Tier 2)** — without wiring bar persistence and feature cache, live bars never reach training.
+
+Full tier list, current vs target status, and wiring checklist: **[stub_implementation_plan.md](./stub_implementation_plan.md)**
+
+| Priority | Tier | Focus |
+|----------|------|-------|
+| 1 | Tier 2 | `TimeseriesStore`, `FeatureStore`, tick loader/aggregator — wire into watcher |
+| 2 | Tier 1 | Reversal/chop/continuation predictors + `FeaturePipeline` |
+| 3 | Tier 3–7 | Risk, ML features, validation, MCTS, symbol intelligence |
+| 4 | Tier 8–10 | Live execution, Streamlit dashboard, research tooling |

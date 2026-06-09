@@ -6,6 +6,8 @@ Multi-layer futures trading signal engine with **SignalRank** scoring (0–100),
 
 Eleven analytical layers feed into SignalRank, orchestrated by the **Trading Supervisor** multi-agent pipeline (`agents/supervisor.py`). See `docs/architecture.md` for the full agent hierarchy.
 
+**Stub roadmap:** ~90 scaffold modules remain. Implementation order and current status are documented in [`docs/stub_implementation_plan.md`](docs/stub_implementation_plan.md). **Start with Tier 2 (data layer)** — wire bar persistence and feature cache before expanding ML stubs.
+
 ## Quick Start
 
 ```bash
