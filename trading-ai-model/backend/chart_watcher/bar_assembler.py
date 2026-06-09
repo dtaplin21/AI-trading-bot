@@ -294,6 +294,13 @@ class BarAssembler:
     def get_history(self, timeframe: str, max_bars: int = 500) -> list[OHLCV]:
         return self._history.get(timeframe, [])[-max_bars:]
 
+    def record_completed(self, bar: OHLCV) -> None:
+        """Append a finalized bar to history without firing on_bar_complete."""
+        hist = self._history[bar.timeframe]
+        hist.append(bar)
+        if len(hist) > 600:
+            self._history[bar.timeframe] = hist[-500:]
+
 
 class MultiSymbolAssembler:
     """One BarAssembler per symbol."""

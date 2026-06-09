@@ -144,6 +144,7 @@ class ChartWatchRunner:
         self._timescale: TimescaleStore | None = None
         self._timeseries: TimeseriesStore | None = None
         self._tick_loaders: list = []
+        self._tick_aggregator = None
 
         logger.info(
             "ChartWatchRunner: mode=%s | symbols=%s | timeframes=%s",
@@ -516,9 +517,11 @@ class ChartWatchRunner:
             await asyncio.sleep(BAR_INTERVAL)
 
     async def _run_live_ticks(self, tick_mode: str) -> None:
-        """Live mode via Polygon tick stream → BarAssembler.on_tick → pipeline."""
+        """Live mode via Polygon tick stream → TickAggregator → pipeline."""
         from data.loaders.tick_data_loader import loaders_for_symbols
+        from data.processors.tick_aggregator import MultiSymbolAggregator, bar_dict_to_ohlcv
 
+        self._tick_aggregator = MultiSymbolAggregator(timeframes=TIMEFRAMES)
         self._tick_loaders = loaders_for_symbols(SYMBOLS)
         if not self._tick_loaders:
             logger.error("ChartWatchRunner: no tick loaders for symbols=%s", SYMBOLS)
@@ -530,6 +533,8 @@ class ChartWatchRunner:
             len(self._tick_loaders),
         )
 
+        tick_agg = self._tick_aggregator
+
         async def consume(loader) -> None:
             async for tick in loader.stream():
                 if not self._running:
@@ -539,11 +544,15 @@ class ChartWatchRunner:
                     continue
                 if not self._scheduler.is_trading(sym):
                     continue
-                asm = self._assembler.get(sym)
-                if not asm:
+                if tick_agg is None:
                     continue
-                completed = await asm.on_tick(tick.price, tick.size, tick.timestamp)
-                for bar in completed:
+                completed = tick_agg.update(sym, tick.price, tick.size, tick.timestamp)
+                for bar_dict in completed:
+                    bar = bar_dict_to_ohlcv(bar_dict)
+                    asm = self._assembler.get(sym)
+                    if asm:
+                        asm.record_completed(bar)
+                    await self._on_bar_complete(bar)
                     self._bars_processed[sym] = self._bars_processed.get(sym, 0) + 1
 
         tasks = [asyncio.create_task(consume(loader)) for loader in self._tick_loaders]
