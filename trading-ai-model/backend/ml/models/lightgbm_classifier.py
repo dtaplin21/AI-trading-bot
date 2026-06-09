@@ -61,7 +61,8 @@ class LightGBMSignalClassifier(BaseModel):
             import numpy as np  # noqa: PLC0415
 
             vec = np.array([extract_vector(features)])
-            prob = float(self._model.predict(vec)[0])
+            raw_pred = self._model.predict(vec)
+            prob = float(np.asarray(raw_pred).ravel()[0])
             if prob > 1 or prob < 0:
                 prob = 1 / (1 + np.exp(-prob))
             return {
