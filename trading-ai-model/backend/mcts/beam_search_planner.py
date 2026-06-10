@@ -91,6 +91,7 @@ class BeamSearchPlanner:
         target_price: Optional[float] = None,
         symbol: str = "",
         timeframe: str = "",
+        level_intel: Optional[dict] = None,
     ) -> TradePlan:
         """Run beam search and return the best TradePlan."""
         from datetime import datetime, timezone
@@ -153,13 +154,21 @@ class BeamSearchPlanner:
 
         best = beam[0]
         trade_action = self._map_action(best.action, best.direction)
+        li = level_intel or {}
+        level_note = ""
+        if li.get("found"):
+            level_note = (
+                f" | level={li.get('level_price')} hold={li.get('hold_rate', 0):.0%}"
+                f" touches={li.get('touch_count', 0)}"
+            )
 
         logger.info(
-            "BeamSearch best: %s | score=%.3f p=%.1f%% ev=$%.2f",
+            "BeamSearch best: %s | score=%.3f p=%.1f%% ev=$%.2f%s",
             best.action,
             best.score,
             best.p_success * 100,
             best.ev_dollars,
+            level_note,
         )
 
         return TradePlan(
@@ -179,7 +188,7 @@ class BeamSearchPlanner:
             take_profit=target_price,
             plan_confidence=best.p_success,
             plan_ev=best.ev_dollars,
-            plan_notes=best.notes,
+            plan_notes=best.notes + level_note,
         )
 
     # ─── Path generation ──────────────────────────────────────────────────────

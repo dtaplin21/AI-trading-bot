@@ -74,6 +74,7 @@ class TradePlanningAgent:
         entry_price: Optional[float] = None,
         stop_price: Optional[float] = None,
         target_price: Optional[float] = None,
+        level_intel: Optional[dict] = None,
     ) -> TradePlan:
         """Full planning pipeline for one signal. Returns a TradePlan for Risk Engine."""
 
@@ -143,6 +144,7 @@ class TradePlanningAgent:
                 stop_price=stop_price,
                 target_price=target_price,
                 timeframe=self.timeframe,
+                level_intel=level_intel,
             )
             self.last_audit = self._mcts.last_audit
             return plan
@@ -164,6 +166,7 @@ class TradePlanningAgent:
             target_price=target_price,
             symbol=self.symbol,
             timeframe=self.timeframe,
+            level_intel=level_intel,
         )
         self.last_audit = self._beam.last_audit
         return plan

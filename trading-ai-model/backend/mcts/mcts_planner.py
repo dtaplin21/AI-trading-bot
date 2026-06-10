@@ -168,8 +168,10 @@ class HierarchicalMCTSPlanner:
         stop_price: Optional[float] = None,
         target_price: Optional[float] = None,
         timeframe: str = "5m",
+        level_intel: Optional[dict] = None,
     ) -> TradePlan:
         """Run MCTS and return the best TradePlan."""
+        li = level_intel or {}
         initial_state = {
             "symbol": self.symbol,
             "timeframe": timeframe,
@@ -180,6 +182,9 @@ class HierarchicalMCTSPlanner:
             "conflict": confluence.conflict_score,
             "direction": confluence.consensus_direction,
             "news_blocked": confluence.news_trading_blocked,
+            "nearest_level_hold_rate": float(li.get("hold_rate", li.get("probability", 0.0))),
+            "nearest_level_touch_count": int(li.get("touch_count", 0)),
+            "nearest_level_role": str(li.get("role", "UNKNOWN")),
         }
 
         # Expectimax pre-filter — skip MCTS when no action has positive EV

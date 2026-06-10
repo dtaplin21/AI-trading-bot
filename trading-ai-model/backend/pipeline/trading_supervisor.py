@@ -257,6 +257,17 @@ class TradingPipelineSupervisor:
                 )
             )
 
+            from ml.features.level_intelligence import get_system
+
+            level_intel = get_system(self.symbol).get_probability(
+                float(merged["close"].iloc[-1])
+            )
+            watchlist = get_system(self.symbol).get_watchlist()
+            ctx.metadata["level_intel"] = level_intel
+            ctx.metadata["level_watchlist"] = (
+                watchlist.to_dict("records") if not watchlist.empty else []
+            )
+
             result.plan = self._planner.plan(
                 confluence=result.confluence,
                 p_success=prediction.trade_start_probability,
@@ -265,6 +276,7 @@ class TradingPipelineSupervisor:
                 signal_rank=fused.signal_rank,
                 p_target=prediction.target_hit_probability,
                 p_stop=prediction.continuation_probability,
+                level_intel=level_intel,
             )
 
             persist_planner_audit(

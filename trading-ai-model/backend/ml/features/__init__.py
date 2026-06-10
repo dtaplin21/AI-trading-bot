@@ -17,6 +17,11 @@ from ml.features.level_significance import (
     SignificantLevel,
     analyze_symbol,
 )
+from ml.features.level_intelligence import (
+    LevelIntelligenceSystem,
+    TouchSnapshot,
+    get_system,
+)
 
 __all__ = [
     "ASSET_CLASS_GROUPS",
@@ -27,7 +32,10 @@ __all__ = [
     "LevelConfig",
     "LevelHistoryTracker",
     "LevelSignificanceAnalyzer",
+    "LevelIntelligenceSystem",
     "SignificantLevel",
+    "TouchSnapshot",
     "UniversalLevelProfile",
     "analyze_symbol",
+    "get_system",
 ]

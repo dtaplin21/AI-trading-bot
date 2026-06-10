@@ -175,6 +175,12 @@ class FeaturePipeline:
         features: dict[str, Any] = {}
         features.update(self._technical_features(df))
 
+        if self.symbol:
+            from ml.features.level_intelligence import get_system
+
+            current_price = float(df["close"].iloc[-1])
+            features.update(get_system(self.symbol).get_features(current_price))
+
         if self.tracker is not None:
             current_price = float(df["close"].iloc[-1])
             features.update(self.tracker.get_features(current_price))

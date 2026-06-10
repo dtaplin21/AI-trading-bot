@@ -640,6 +640,17 @@ class ChartWatchRunner:
         history = asm.get_history(bar.timeframe)
         ohlcv = self._history_to_dataframe(history)
 
+        if len(ohlcv) >= MIN_OHLCV_BARS:
+            try:
+                from config.symbols import get_symbol_or_none
+                from ml.features.level_intelligence import get_system
+
+                spec = get_symbol_or_none(bar.symbol)
+                asset_class = spec.asset_class if spec else "equity"
+                get_system(bar.symbol, asset_class).process_bar(ohlcv)
+            except Exception as exc:
+                logger.debug("LevelIntelligence process_bar [%s]: %s", bar.symbol, exc)
+
         try:
             result = await sup.on_new_bar(bar, ohlcv=ohlcv if len(ohlcv) >= MIN_OHLCV_BARS else None)
             if result.errors:
