@@ -200,8 +200,8 @@ def build_prediction_features(
     """
     Assemble a feature dict for reversal inference from pipeline context.
 
-    Merges shared features, fused outputs, technical features from OHLCV,
-    and level features from the symbol's saved level tracker (if loaded).
+    Uses FeaturePipeline for technical, level, and cross-symbol features
+    so training and inference share identical computation.
     """
     features: dict[str, Any] = dict(shared_features or {})
 
@@ -213,21 +213,12 @@ def build_prediction_features(
 
     if ohlcv is not None and not ohlcv.empty and len(ohlcv) >= 20:
         try:
-            from ml.training.train_reversal_models import compute_technical_features
+            from ml.features.feature_pipeline import FeaturePipeline
 
-            tech = compute_technical_features(ohlcv)
-            if not tech.empty:
-                features.update(tech.iloc[-1].to_dict())
+            pipeline = FeaturePipeline.for_symbol(symbol)
+            features.update(pipeline.compute(ohlcv))
         except Exception as exc:
-            logger.debug("%s: technical feature build failed: %s", symbol, exc)
-
-    predictor = get_predictor(symbol)
-    if predictor._level_tracker is not None and ohlcv is not None and not ohlcv.empty:
-        try:
-            close = float(ohlcv["close"].iloc[-1])
-            features.update(predictor._level_tracker.get_features(close))
-        except Exception as exc:
-            logger.debug("%s: level feature build failed: %s", symbol, exc)
+            logger.debug("%s: feature pipeline build failed: %s", symbol, exc)
 
     return features
 

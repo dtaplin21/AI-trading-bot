@@ -12,6 +12,11 @@ from ml.features.level_history import (
     LevelConfig,
     LevelHistoryTracker,
 )
+from ml.features.level_significance import (
+    LevelSignificanceAnalyzer,
+    SignificantLevel,
+    analyze_symbol,
+)
 
 __all__ = [
     "ASSET_CLASS_GROUPS",
@@ -21,5 +26,8 @@ __all__ = [
     "Level",
     "LevelConfig",
     "LevelHistoryTracker",
+    "LevelSignificanceAnalyzer",
+    "SignificantLevel",
     "UniversalLevelProfile",
+    "analyze_symbol",
 ]

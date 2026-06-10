@@ -43,6 +43,15 @@ def test_build_computes_shared_indicators():
     assert features["close"] == 139.0
 
 
+def test_compute_returns_training_feature_keys():
+    pipeline = FeaturePipeline()
+    features = pipeline.compute(_sample_ohlcv())
+    assert "rsi_14" in features
+    assert "macd_line" in features
+    assert "atr_14" in features
+    assert "volume_ratio" in features
+
+
 def test_build_uses_cache_on_second_call():
     get_feature_store().clear()
     pipeline = FeaturePipeline()

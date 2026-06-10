@@ -34,7 +34,7 @@ import warnings
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -121,7 +121,7 @@ def load_bars(symbol: str, start: str, end: str) -> pd.DataFrame:
     )
 
     logger.info("%s: %d 1m bars → %d 5m bars", symbol, len(df), len(df_5m))
-    return df_5m
+    return cast(pd.DataFrame, df_5m)
 
 
 # ─── Technical features ───────────────────────────────────────────────────────
@@ -129,17 +129,18 @@ def load_bars(symbol: str, start: str, end: str) -> pd.DataFrame:
 
 def compute_rsi(series: pd.Series, period: int) -> pd.Series:
     delta = series.diff()
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = (-delta.clip(upper=0)).rolling(period).mean()
-    rs = gain / loss.replace(0, np.nan)
-    return 100 - (100 / (1 + rs))
+    gain = cast(pd.Series, delta.clip(lower=0).rolling(period).mean())
+    loss = cast(pd.Series, (-delta.clip(upper=0)).rolling(period).mean())
+    rs = gain.div(loss.where(loss != 0))
+    return pd.Series(100 - (100 / (1 + rs)), index=series.index)
 
 
 def compute_atr(df: pd.DataFrame, period: int) -> pd.Series:
     hl = df["high"] - df["low"]
     hc = (df["high"] - df["close"].shift()).abs()
     lc = (df["low"] - df["close"].shift()).abs()
-    return pd.concat([hl, hc, lc], axis=1).max(axis=1).rolling(period).mean()
+    tr = cast(pd.Series, pd.concat([hl, hc, lc], axis=1).max(axis=1))
+    return cast(pd.Series, tr.rolling(period).mean())
 
 
 def compute_macd(
@@ -155,18 +156,18 @@ def compute_macd(
 def compute_bollinger(
     series: pd.Series, period: int = 20, std: float = 2.0
 ) -> tuple[pd.Series, pd.Series]:
-    sma = series.rolling(period).mean()
-    sd = series.rolling(period).std()
+    sma = cast(pd.Series, series.rolling(period).mean())
+    sd = cast(pd.Series, series.rolling(period).std())
     upper = sma + std * sd
     lower = sma - std * sd
-    pos = (series - lower) / (upper - lower + 1e-10)
-    width = (upper - lower) / sma
+    pos = cast(pd.Series, (series - lower) / (upper - lower + 1e-10))
+    width = cast(pd.Series, (upper - lower) / sma)
     return pos, width
 
 
 def compute_technical_features(df: pd.DataFrame) -> pd.DataFrame:
     feat = pd.DataFrame(index=df.index)
-    close = df["close"]
+    close = cast(pd.Series, df["close"])
 
     feat["rsi_7"] = compute_rsi(close, 7)
     feat["rsi_14"] = compute_rsi(close, 14)
@@ -218,8 +219,11 @@ def compute_technical_features(df: pd.DataFrame) -> pd.DataFrame:
     feat["volume_trend"] = df["volume"].pct_change(5)
     feat["volume_spike"] = (feat["volume_ratio"] > 2.0).astype(int)
 
-    feat["hour"] = df.index.hour
-    feat["day_of_week"] = df.index.dayofweek
+    parsed = pd.to_datetime(df.index)
+    feat["hour"] = pd.Series([ts.hour for ts in parsed], index=df.index, dtype=int)
+    feat["day_of_week"] = pd.Series(
+        [ts.dayofweek for ts in parsed], index=df.index, dtype=int
+    )
     feat["london_session"] = ((feat["hour"] >= 7) & (feat["hour"] < 16)).astype(int)
     feat["ny_session"] = ((feat["hour"] >= 13) & (feat["hour"] < 21)).astype(int)
     feat["asia_session"] = ((feat["hour"] >= 0) & (feat["hour"] < 8)).astype(int)
@@ -366,10 +370,14 @@ def train_model(X_train, y_train, X_val, y_val):
         if n.startswith("level_") or n.startswith("cx_")
     ]
 
+    auc_f = float(np.asarray(auc).item())
+    brier_f = float(np.asarray(brier).item())
+    base_rate_f = float(np.asarray(y_val, dtype=float).mean())
+
     metrics = {
-        "auc": round(auc, 4),
-        "brier_score": round(brier, 4),
-        "base_rate": round(float(y_val.mean()), 4),
+        "auc": round(auc_f, 4),
+        "brier_score": round(brier_f, 4),
+        "base_rate": round(base_rate_f, 4),
         "n_train": len(y_train),
         "n_val": len(y_val),
         "best_iteration": model.best_iteration,
@@ -502,6 +510,33 @@ def fit_all_trackers(symbols: list[str], bars: dict[str, pd.DataFrame], model_di
     return trackers
 
 
+def fit_all_significance(
+    symbols: list[str], bars: dict[str, pd.DataFrame], model_dir: Path
+) -> dict:
+    """Fit LevelSignificanceAnalyzer for every symbol. Returns {symbol: analyzer}."""
+    from ml.features.level_significance import LevelSignificanceAnalyzer
+
+    analyzers = {}
+    for symbol in symbols:
+        df = bars.get(symbol)
+        if df is None or df.empty:
+            logger.warning("%s: no bars — skipping significance fit", symbol)
+            continue
+
+        asset_class = SYMBOL_ASSET_CLASS.get(symbol, "equity")
+        analyzer = LevelSignificanceAnalyzer(symbol=symbol, asset_class=asset_class)
+        analyzer.fit(df)
+
+        levels_dir = model_dir / symbol
+        levels_dir.mkdir(parents=True, exist_ok=True)
+        analyzer.save(str(levels_dir / "significance_latest.json"))
+
+        analyzers[symbol] = analyzer
+
+    logger.info("Phase 1b complete — fitted %d significance analyzers", len(analyzers))
+    return analyzers
+
+
 # ─── Phase 2 — cross-symbol analysis ──────────────────────────────────────────
 
 
@@ -528,6 +563,7 @@ def train_symbol(
     val_start: str,
     model_dir: Path,
     dry_run: bool = False,
+    significance=None,
 ) -> dict[str, Any]:
     asset_class = SYMBOL_ASSET_CLASS.get(symbol, "equity")
     cfg = ASSET_CONFIGS[asset_class]
@@ -569,10 +605,16 @@ def train_symbol(
     logger.info("%s: computing cross-symbol features...", symbol)
     cx_feat = compute_cross_symbol_features(df, symbol, tracker, analyzer, all_trackers)
 
+    if significance is not None:
+        logger.info("%s: computing level significance features...", symbol)
+        sig_feat = significance.get_features_series(df)
+    else:
+        sig_feat = pd.DataFrame(index=df.index)
+
     logger.info("%s: labeling reversals...", symbol)
     labels = label_reversals(df, cfg)
 
-    data = pd.concat([tech_feat, level_feat, cx_feat, labels], axis=1).dropna()
+    data = pd.concat([tech_feat, level_feat, cx_feat, sig_feat, labels], axis=1).dropna()
 
     if len(data) < 500:
         return {"symbol": symbol, "status": "skipped", "reason": "insufficient_labels"}
@@ -582,14 +624,15 @@ def train_symbol(
 
     logger.info(
         "%s: %d samples | %.1f%% reversals | %d features "
-        "(%d level, %d cx, %d technical)",
+        "(%d level, %d cx, %d sig, %d technical)",
         symbol,
         len(data),
         base_rate * 100,
         len(feature_cols),
         sum(1 for c in feature_cols if c.startswith("level_")),
         sum(1 for c in feature_cols if c.startswith("cx_")),
-        sum(1 for c in feature_cols if not c.startswith(("level_", "cx_"))),
+        sum(1 for c in feature_cols if c.startswith("sig_")),
+        sum(1 for c in feature_cols if not c.startswith(("level_", "cx_", "sig_"))),
     )
 
     val_ts = pd.Timestamp(val_start, tz="UTC")
@@ -666,6 +709,9 @@ def main() -> None:
 
     trackers = fit_all_trackers(symbols, bars, model_dir)
 
+    logger.info("PHASE 1b: Level significance analysis...")
+    significance = fit_all_significance(symbols, bars, model_dir)
+
     logger.info("PHASE 2: Cross-symbol analysis...")
     analyzer = run_cross_symbol_analysis(trackers, model_dir)
 
@@ -691,6 +737,7 @@ def main() -> None:
                 val_start=args.val_start,
                 model_dir=model_dir,
                 dry_run=args.dry_run,
+                significance=significance.get(symbol),
             )
             results.append(result)
         except Exception as e:

@@ -113,7 +113,7 @@ class TradingPipelineSupervisor:
             watched_symbols=[self.symbol],
             watched_timeframes=[self.timeframe],
         )
-        self._feature_pipeline = FeaturePipeline()
+        self._feature_pipeline = FeaturePipeline.for_symbol(self.symbol)
         self._feature_store = get_feature_store()
 
         logger.info(
