@@ -47,9 +47,23 @@ class ProbabilityGate:
         sample_size: int,
         signal_rank: int,
         context: str = "",
+        chop_probability: float | None = None,
+        continuation_probability: float | None = None,
     ) -> GateResult:
         failures: list[str] = []
         prefix = f"{context}: " if context else ""
+        chop_max = float(os.getenv("CHOP_GATE_MAX", "0.65"))
+        cont_max = float(os.getenv("CONTINUATION_GATE_MAX", "0.65"))
+
+        if chop_probability is not None and chop_probability >= chop_max:
+            failures.append(
+                f"{prefix}chop probability {chop_probability:.2f} >= {chop_max:.2f}"
+            )
+        if continuation_probability is not None and continuation_probability >= cont_max:
+            failures.append(
+                f"{prefix}continuation probability {continuation_probability:.2f} "
+                f">= {cont_max:.2f} (suppresses reversal entry)"
+            )
 
         if p_success < self.p_min:
             failures.append(f"{prefix}P(success) {p_success:.2f} < {self.p_min:.2f}")

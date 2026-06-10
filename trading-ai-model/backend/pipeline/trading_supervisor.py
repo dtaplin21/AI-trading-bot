@@ -191,7 +191,13 @@ class TradingPipelineSupervisor:
             if hist_n <= 0:
                 hist_n = int(fused.sample_size or ctx.historical_sample_size or 0)
 
-            prediction = await self._run_prediction(fused, hist_p, hist_n)
+            prediction = await self._run_prediction(
+                fused,
+                hist_p,
+                hist_n,
+                ohlcv=merged,
+                shared_features=ctx.metadata.get("shared_features"),
+            )
             result.prediction = prediction
 
             gate = self._gate.check(
@@ -200,6 +206,8 @@ class TradingPipelineSupervisor:
                 hist_n,
                 fused.signal_rank,
                 f"{self.symbol} {self.timeframe}",
+                chop_probability=prediction.chop_probability,
+                continuation_probability=prediction.continuation_probability,
             )
             if not gate.passed:
                 result.audit = self._build_audit(result)
@@ -350,38 +358,33 @@ class TradingPipelineSupervisor:
         fused: FusedFeatureSet,
         hist_p: float,
         hist_n: int,
+        ohlcv: pd.DataFrame | None = None,
+        shared_features: dict | None = None,
     ) -> PredictionOutput:
-        p = hist_p if hist_p > 0 else getattr(fused, "confluence_score", 0.0)
-        try:
-            import pickle
-            from pathlib import Path
+        from ml.models.chop_detector import detect_chop
+        from ml.models.continuation_predictor import predict_continuation
+        from ml.models.reversal_predictor import predict_reversal
 
-            mp = os.getenv("LIGHTGBM_MODEL_PATH", "ml/models/lightgbm_production.pkl")
-            if Path(mp).exists():
-                with open(mp, "rb") as f:
-                    payload = pickle.load(f)
-                model = payload["model"] if isinstance(payload, dict) else payload
-                X = np.array(
-                    [
-                        [
-                            fused.wick_rejection_score,
-                            fused.candle_reversal_prob,
-                            fused.harmonic_completion_score,
-                            fused.fib_distance_ticks,
-                            fused.markov_continuation_probability,
-                            fused.momentum_score,
-                            fused.strategy_ev,
-                            fused.signal_rank / 100.0,
-                            getattr(fused, "confluence_score", 0.0),
-                        ]
-                    ]
-                )
-                p = float(model.predict(X)[0])
-        except Exception:
-            pass
+        if ohlcv is not None and len(ohlcv) >= 20:
+            chop_p = detect_chop(ohlcv)
+            cont_p = predict_continuation(ohlcv)
+        else:
+            chop_p = 0.5
+            cont_p = 0.5
 
+        p = predict_reversal(
+            self.symbol,
+            features={},
+            ohlcv=ohlcv,
+            fused=fused,
+            shared_features=shared_features,
+        )
         if hist_p > 0:
             p = (p + hist_p) / 2
+
+        # Dampen reversal confidence in choppy or strongly trending markets
+        p = p * (1.0 - chop_p * 0.5)
+        p = p * (1.0 - cont_p * 0.4)
 
         return PredictionOutput(
             symbol=self.symbol,
@@ -389,9 +392,10 @@ class TradingPipelineSupervisor:
             timestamp=datetime.now(tz=timezone.utc),
             trade_start_probability=round(p, 4),
             target_hit_probability=round(p * 0.85, 4),
-            continuation_probability=round((1 - p) * 0.60, 4),
+            continuation_probability=round(cont_p, 4),
             model_confidence=round(p, 4),
             expected_value=fused.strategy_ev,
+            chop_probability=round(chop_p, 4),
         )
 
     async def _execute(
