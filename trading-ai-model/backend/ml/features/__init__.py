@@ -22,6 +22,12 @@ from ml.features.level_intelligence import (
     TouchSnapshot,
     get_system,
 )
+from ml.features.trade_exit_optimizer import (
+    LevelExitStrategy,
+    TradeExitOptimizer,
+    compute_excursions,
+    optimize_tp_sl,
+)
 
 __all__ = [
     "ASSET_CLASS_GROUPS",
@@ -33,9 +39,13 @@ __all__ = [
     "LevelHistoryTracker",
     "LevelSignificanceAnalyzer",
     "LevelIntelligenceSystem",
+    "LevelExitStrategy",
+    "TradeExitOptimizer",
     "SignificantLevel",
     "TouchSnapshot",
     "UniversalLevelProfile",
     "analyze_symbol",
+    "compute_excursions",
     "get_system",
+    "optimize_tp_sl",
 ]
