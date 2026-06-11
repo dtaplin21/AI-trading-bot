@@ -1,21 +1,29 @@
 #!/usr/bin/env python3
 """
-Compute optimal TP/SL per price level from historical MFE/MAE.
+scripts/compute_exit_optimizer.py
 
-Requires:
-  - DATABASE_URL with seeded level_touches / price_levels (seed_level_intelligence.py)
-  - OHLCV backfill in ohlcv_candles
+Computes optimal TP/SL for every level in the database
+using historical MFE/MAE from actual OHLCV bars.
 
-Usage (from backend/):
+Run after seed_level_intelligence.py has populated level_touches.
+
+Run (from backend/):
   python scripts/compute_exit_optimizer.py --symbols EURUSD,BTCUSD
+  python scripts/compute_exit_optimizer.py
   python scripts/compute_exit_optimizer.py --min-touches 8
+
+Env:
+  DATABASE_URL         required (or set in backend/.env)
+  DATABASE_SSL_DISABLE set true for local Postgres without SSL
 """
 from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
+from typing import cast
 
 import pandas as pd
 
@@ -23,26 +31,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.settings import get_settings
 from config.symbols import SYMBOLS
-from data.storage.pg_connect import is_database_url_placeholder
+from data.storage.pg_connect import connect_psycopg2, is_database_url_placeholder
 from ml.features.trade_exit_optimizer import TradeExitOptimizer
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s: %(message)s",
 )
-logger = logging.getLogger("compute_exit_optimizer")
+logger = logging.getLogger("compute_exits")
 
 SYMBOL_ASSET_CLASS = {sym: spec.asset_class for sym, spec in SYMBOLS.items()}
 DEFAULT_SYMBOLS = list(SYMBOL_ASSET_CLASS.keys())
 
 
 def _database_url() -> str:
-    return (get_settings().database_url or "").strip()
+    return (get_settings().database_url or os.getenv("DATABASE_URL", "")).strip()
 
 
-def load_all_bars(symbol: str) -> pd.DataFrame:
-    """Load all 1m bars and resample to 5m."""
-    from data.storage.pg_connect import connect_psycopg2
+def load_bars(symbol: str) -> pd.DataFrame:
+    """Load all 1m bars from ohlcv_candles and resample to 5m."""
     from data.storage.timeseries_store import TimeseriesStore
 
     sym = symbol.upper()
@@ -84,7 +91,7 @@ def load_all_bars(symbol: str) -> pd.DataFrame:
         .dropna()
     )
     logger.info("%s: %d 1m bars → %d 5m bars", sym, len(df), len(df_5m))
-    return df_5m
+    return cast(pd.DataFrame, df_5m)
 
 
 def main() -> None:
@@ -116,14 +123,14 @@ def main() -> None:
         logger.info("Optimizing exits for %s (%s)", symbol, asset_class)
 
         try:
-            df = load_all_bars(symbol)
+            df = load_bars(symbol)
             if df.empty or len(df) < 500:
-                logger.warning("%s: insufficient OHLCV bars — skipping", symbol)
+                logger.warning("%s: insufficient bars — skipping", symbol)
                 continue
 
             optimizer = TradeExitOptimizer(symbol, asset_class)
             optimizer.run(df, min_touches=args.min_touches)
-            optimizer.print_all()
+            optimizer.print_all(top_n=10)
             optimizer.print_watchlist_with_exits()
 
         except Exception as exc:

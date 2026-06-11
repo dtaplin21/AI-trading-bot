@@ -207,14 +207,22 @@ def optimize_tp_sl(
     }
 
 
+def _cell_present(val: Any) -> bool:
+    if isinstance(val, pd.Series):
+        val = val.iloc[0] if len(val) else None
+    if val is None:
+        return False
+    if isinstance(val, (float, np.floating)):
+        return not bool(np.isnan(float(val)))
+    return True
+
+
 def _bar_index_for_touch(df: pd.DataFrame, touched_at: Any) -> Optional[int]:
     """Map a touch timestamp to the nearest bar index in df."""
     if df.empty:
         return None
 
-    index = df.index
-    if index.tz is None:
-        index = pd.DatetimeIndex(pd.to_datetime(index, utc=True))
+    index = pd.DatetimeIndex(pd.to_datetime(cast(Any, df.index), utc=True))
     bar_time = pd.to_datetime(touched_at, utc=True)
 
     idx = int(index.searchsorted(bar_time))
@@ -563,32 +571,16 @@ class TradeExitOptimizer:
         print(f"  {'-' * 85}")
 
         for _, row in df.iterrows():
-            tp = (
-                f"{float(row['optimal_tp_pct']):.3f}"
-                if row["optimal_tp_pct"] is not None and not pd.isna(row["optimal_tp_pct"])
-                else "—"
-            )
-            sl = (
-                f"{float(row['optimal_sl_pct']):.3f}"
-                if row["optimal_sl_pct"] is not None and not pd.isna(row["optimal_sl_pct"])
-                else "—"
-            )
-            rr = (
-                f"{float(row['optimal_rr']):.1f}"
-                if row["optimal_rr"] is not None and not pd.isna(row["optimal_rr"])
-                else "—"
-            )
-            ev = (
-                f"{float(row['expected_value_pct']):+.3f}%"
-                if row["expected_value_pct"] is not None
-                and not pd.isna(row["expected_value_pct"])
-                else "—"
-            )
-            wr = (
-                f"{float(row['exit_win_rate']) * 100:.1f}%"
-                if row["exit_win_rate"] is not None and not pd.isna(row["exit_win_rate"])
-                else "—"
-            )
+            tp_val = cast(Any, row["optimal_tp_pct"])
+            sl_val = cast(Any, row["optimal_sl_pct"])
+            rr_val = cast(Any, row["optimal_rr"])
+            ev_val = cast(Any, row["expected_value_pct"])
+            wr_val = cast(Any, row["exit_win_rate"])
+            tp = f"{float(tp_val):.3f}" if _cell_present(tp_val) else "—"
+            sl = f"{float(sl_val):.3f}" if _cell_present(sl_val) else "—"
+            rr = f"{float(rr_val):.1f}" if _cell_present(rr_val) else "—"
+            ev = f"{float(ev_val):+.3f}%" if _cell_present(ev_val) else "—"
+            wr = f"{float(wr_val) * 100:.1f}%" if _cell_present(wr_val) else "—"
 
             print(
                 f"  {float(row['level_price']):>10.5f} "
