@@ -11,7 +11,7 @@ This is essential for brokers that don't support native bracket orders
 (Coinbase, tastytrade futures). OANDA handles TP/SL natively but we
 still track here for the learning loop.
 
-Called on every new bar by ChartWatchRunner, after on_new_bar().
+Called on every new bar by TradingPipelineSupervisor (live mode).
 """
 from __future__ import annotations
 
@@ -68,6 +68,8 @@ class LivePositionMonitor:
         self._router = get_broker_router()
         logger.info("LivePositionMonitor started")
 
+    # ── Register / remove ─────────────────────────────────────────────────────
+
     def register(self, position: LivePosition) -> None:
         """Called by LiveExecutionAgent after a fill is confirmed."""
         self._positions[position.trade_id] = position
@@ -87,6 +89,8 @@ class LivePositionMonitor:
     def open_positions(self) -> List[LivePosition]:
         return list(self._positions.values())
 
+    # ── Main bar check ────────────────────────────────────────────────────────
+
     async def on_bar(self, symbol: str, high: float, low: float, close: float) -> List[CloseResult]:
         """
         Called on every completed bar for this symbol.
@@ -101,7 +105,7 @@ class LivePositionMonitor:
                 continue
 
             pos.bars_held += 1
-            reason: Optional[str] = None
+            reason = None
 
             if kill_switch:
                 reason = "KILL_SWITCH"
@@ -131,6 +135,8 @@ class LivePositionMonitor:
                 closed.append(result)
 
         return closed
+
+    # ── Close logic ──────────────────────────────────────────────────────────
 
     async def _close(
         self,
@@ -188,6 +194,8 @@ class LivePositionMonitor:
         )
         return result
 
+    # ── Helpers ──────────────────────────────────────────────────────────────
+
     def _estimate_exit_price(
         self,
         pos: LivePosition,
@@ -217,11 +225,9 @@ class LivePositionMonitor:
                         UPDATE live_trades SET
                             exit_price  = %s,
                             exit_time   = NOW(),
-                            closed_at   = NOW(),
                             exit_reason = %s,
                             bars_held   = %s,
                             pnl_pct     = %s,
-                            pnl         = %s,
                             outcome     = %s,
                             status      = 'CLOSED'
                         WHERE trade_id = %s
@@ -230,7 +236,6 @@ class LivePositionMonitor:
                             result.exit_price,
                             result.reason,
                             result.bars_held,
-                            result.pnl_pct,
                             result.pnl_pct,
                             result.outcome,
                             result.trade_id,
@@ -241,7 +246,9 @@ class LivePositionMonitor:
             logger.error("_record_close DB write failed: %s", exc)
 
 
-_monitor: Optional[LivePositionMonitor] = None
+# ── Module-level singleton ────────────────────────────────────────────────────
+
+_monitor: LivePositionMonitor | None = None
 
 
 def get_position_monitor() -> LivePositionMonitor:
@@ -252,5 +259,6 @@ def get_position_monitor() -> LivePositionMonitor:
 
 
 def reset_position_monitor() -> None:
+    """Reset singleton — for tests."""
     global _monitor
     _monitor = None
