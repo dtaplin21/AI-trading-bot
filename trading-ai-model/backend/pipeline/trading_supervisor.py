@@ -1,11 +1,24 @@
 """
-pipeline/trading_supervisor.py  — FULLY WIRED VERSION (Phase 1 live)
+pipeline/trading_supervisor.py  (Live Trading — Phase 1)
 
-Phase 1 live changes:
-  • LevelEntryGate is the first entry gate — no level, no trade
-  • _execute() calls LiveExecutionAgent.execute_level() for live orders
-  • LivePositionMonitor.on_bar() every bar for TP/SL (live mode)
-  • PaperTrader removed — paper_mode logs only, no simulated fills
+Changes from paper version:
+  • _execute() calls LiveExecutionAgent.execute_level() — real broker orders
+  • LivePositionMonitor.on_bar() called every bar to check TP/SL hits
+  • PaperTrader removed entirely
+  • LevelEntryGate still the first gate — no level, no trade
+
+Retains the full wired pipeline: confluence, ML, MCTS planner, RiskEngine.
+
+Phase 1.5 additions:
+  • Method agreement gate — methods confirm level direction (LEVEL_MIN_METHOD_AGREEMENT)
+  • Fused P_level + ML for probability gate (LEVEL_ML_BLEND_WEIGHT)
+  • DB entry/TP/SL passed to planner and applied to TradePlan
+  • Position monitor in paper mode (TP/SL tracking without broker close)
+
+Fast lane (LEVEL_FAST_LANE=true, default):
+  • Only actionable watchlist rows (Price Role Entry TP% SL% R:R EV% Win% Hits)
+  • Skips methods, ML, confluence, probability gate
+  • Hard safety only: kill switch, daily loss, drawdown, max positions, notional caps
 """
 from __future__ import annotations
 
@@ -35,7 +48,14 @@ from pipeline.feature_fusion_news_patch import (
     NewsAgentProtocol,
     fetch_news_features,
 )
-from pipeline.level_entry_gate import LevelEntryGate, _gate_disabled
+from pipeline.level_entry_gate import LevelEntryGate, _gate_disabled, level_fast_lane_enabled
+from pipeline.level_method_fusion import (
+    apply_level_to_plan,
+    fused_level_probability,
+    method_agreement_score,
+    min_method_agreement,
+    plan_from_level_setup,
+)
 from pipeline.level_setup import LevelSetup
 from pipeline.planner_audit_service import persist_planner_audit
 from pipeline.probability_gate import ProbabilityGate
@@ -72,11 +92,17 @@ class TradingPipelineResult:
         self.audit: Optional[AuditReport] = None
         self.executed: bool = False
         self.skipped: bool = False
+        self.fast_lane: bool = False
         self.closed_positions: list = []
         self.errors: list[str] = []
 
 
 class TradingPipelineSupervisor:
+    """
+    One instance per symbol/timeframe.
+    Phase 1 live: gate → pipeline → live order → position monitor.
+    """
+
     def __init__(
         self,
         symbol: str,
@@ -117,14 +143,16 @@ class TradingPipelineSupervisor:
         self._feature_store = get_feature_store()
         self._level_gate = LevelEntryGate(symbol=self.symbol)
 
+        from live.live_position_monitor import get_position_monitor
+
+        self._pos_monitor = get_position_monitor()
+        self._pos_monitor.configure(paper_mode=paper_mode)
+
         self._live_agent = None
-        self._pos_monitor = None
         if not paper_mode:
             from live.live_execution_agent import get_live_execution_agent
-            from live.live_position_monitor import get_position_monitor
 
             self._live_agent = get_live_execution_agent()
-            self._pos_monitor = get_position_monitor()
 
         logger.info(
             "Supervisor WIRED | %s %s | mode=%s | news=%s | kill=%s",
@@ -166,6 +194,12 @@ class TradingPipelineSupervisor:
                 return result
 
             result.level_setup = level_setup
+            if level_setup is not None:
+                logger.info("%s: level gate PASSED — %s", self.symbol, level_setup)
+                if level_fast_lane_enabled():
+                    return await self._run_level_fast_lane(
+                        bar, level_setup, result, should_execute, portfolio
+                    )
 
             merged = self._merge_bar(ohlcv, bar)
             if merged is None or len(merged) < 20:
@@ -216,6 +250,20 @@ class TradingPipelineSupervisor:
                 result.audit = self._build_audit(result)
                 return result
 
+            if level_setup is not None:
+                agreement = method_agreement_score(result.confluence, level_setup)
+                level_setup.method_agreement = agreement
+                if agreement < min_method_agreement():
+                    result.skipped = True
+                    logger.info(
+                        "%s: method agreement %.2f < min %.2f — skipping",
+                        self.symbol,
+                        agreement,
+                        min_method_agreement(),
+                    )
+                    result.audit = self._build_audit(result)
+                    return result
+
             hist_p, hist_n = self._world.compute_historical_p_success(result.confluence)
             if hist_n <= 0:
                 hist_n = int(fused.sample_size or ctx.historical_sample_size or 0)
@@ -229,8 +277,15 @@ class TradingPipelineSupervisor:
             )
             result.prediction = prediction
 
+            p_for_gate = prediction.trade_start_probability
+            if level_setup is not None:
+                level_setup.fused_probability = fused_level_probability(
+                    level_setup, prediction.trade_start_probability
+                )
+                p_for_gate = level_setup.fused_probability
+
             gate = self._gate.check(
-                prediction.trade_start_probability,
+                p_for_gate,
                 prediction.expected_value,
                 hist_n,
                 fused.signal_rank,
@@ -301,14 +356,19 @@ class TradingPipelineSupervisor:
 
             result.plan = self._planner.plan(
                 confluence=result.confluence,
-                p_success=prediction.trade_start_probability,
+                p_success=p_for_gate,
                 ev_dollars=prediction.expected_value,
                 sample_size=hist_n,
                 signal_rank=fused.signal_rank,
                 p_target=prediction.target_hit_probability,
                 p_stop=prediction.continuation_probability,
+                entry_price=level_setup.entry_price if level_setup else None,
+                stop_price=level_setup.stop_price if level_setup else None,
+                target_price=level_setup.target_price if level_setup else None,
                 level_intel=level_intel,
             )
+            if level_setup is not None and result.plan is not None:
+                result.plan = apply_level_to_plan(result.plan, level_setup)
 
             persist_planner_audit(
                 self._planner.last_audit,
@@ -443,6 +503,42 @@ class TradingPipelineSupervisor:
             chop_probability=round(chop_p, 4),
         )
 
+    async def _run_level_fast_lane(
+        self,
+        bar: OHLCV,
+        level_setup: LevelSetup,
+        result: TradingPipelineResult,
+        should_execute: bool,
+        portfolio: PortfolioState | None,
+    ) -> TradingPipelineResult:
+        """Actionable watchlist only — skip methods, ML, confluence, soft risk."""
+        result.fast_lane = True
+        if portfolio:
+            self._risk_eng.sync_portfolio(portfolio)
+
+        tf = bar.timeframe or self.timeframe
+        result.plan = plan_from_level_setup(level_setup, tf)
+        result.risk = self._risk_eng.approve_level_fast_lane(result.plan, level_setup)
+
+        if result.risk.approved and should_execute:
+            result.executed = await self._execute(
+                result.plan,
+                result.risk,
+                result.snapshot_id or str(uuid.uuid4()),
+                level_setup=level_setup,
+            )
+
+        result.audit = self._build_audit(result)
+        logger.info(
+            "%s: level fast lane | approved=%s executed=%s ev=%.3f%% rr=%.1f",
+            self.symbol,
+            result.risk.approved,
+            result.executed,
+            level_setup.expected_value_pct,
+            level_setup.optimal_rr,
+        )
+        return result
+
     async def _execute(
         self,
         plan: TradePlan,
@@ -466,6 +562,27 @@ class TradingPipelineSupervisor:
                 level_setup.target_price,
                 level_setup.stop_price,
             )
+            if self._pos_monitor is not None:
+                from live.live_position_monitor import LivePosition
+
+                qty = float(max(risk.position_size_contracts, 1))
+                self._pos_monitor.register(
+                    LivePosition(
+                        trade_id=f"paper-{snapshot_id[:12]}",
+                        symbol=level_setup.symbol,
+                        side="LONG" if level_setup.entry_side == "BUY" else "SHORT",
+                        entry_price=level_setup.entry_price,
+                        target_price=level_setup.target_price,
+                        stop_price=level_setup.stop_price,
+                        quantity=qty,
+                        broker_order_id="paper",
+                        tp_pct=level_setup.optimal_tp_pct,
+                        sl_pct=level_setup.optimal_sl_pct,
+                        ev_pct=level_setup.expected_value_pct,
+                        touch_count=level_setup.touch_count,
+                        hold_rate=level_setup.hold_rate,
+                    )
+                )
             return True
 
         if self._live_agent is not None:

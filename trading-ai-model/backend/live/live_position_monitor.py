@@ -66,7 +66,11 @@ class LivePositionMonitor:
     def __init__(self) -> None:
         self._positions: Dict[str, LivePosition] = {}
         self._router = get_broker_router()
+        self.paper_mode = False
         logger.info("LivePositionMonitor started")
+
+    def configure(self, *, paper_mode: bool) -> None:
+        self.paper_mode = paper_mode
 
     # ── Register / remove ─────────────────────────────────────────────────────
 
@@ -156,8 +160,9 @@ class LivePositionMonitor:
         )
 
         try:
-            broker = self._router.get(pos.symbol)
-            await broker.close_position(pos.symbol, pos.quantity)
+            if not self.paper_mode:
+                broker = self._router.get(pos.symbol)
+                await broker.close_position(pos.symbol, pos.quantity)
         except Exception as exc:
             logger.error(
                 "Close order failed for %s: %s — still recording as closed",

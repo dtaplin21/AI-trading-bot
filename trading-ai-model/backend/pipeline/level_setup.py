@@ -23,6 +23,8 @@ class LevelSetup:
     expected_value_pct: float
     strength_score: float = 0.0
     role: str = "UNKNOWN"
+    optimal_rr: float = 0.0
+    exit_win_rate: float = 0.0
     fused_probability: float = 0.0
     method_agreement: float = 1.0
 
@@ -45,6 +47,8 @@ class LevelSetup:
             "expected_value_pct": self.expected_value_pct,
             "strength_score": self.strength_score,
             "role": self.role,
+            "optimal_rr": self.optimal_rr,
+            "exit_win_rate": self.exit_win_rate,
             "fused_probability": self.fused_probability,
             "method_agreement": self.method_agreement,
         }
@@ -86,6 +90,8 @@ class LevelSetup:
             expected_value_pct=float(expected_value_pct),
             strength_score=float(kwargs.get("strength_score", 0.0)),
             role=str(kwargs.get("role", "UNKNOWN")),
+            optimal_rr=float(kwargs.get("optimal_rr", 0.0)),
+            exit_win_rate=float(kwargs.get("exit_win_rate", 0.0)),
             fused_probability=float(kwargs.get("fused_probability", hold_rate)),
             method_agreement=float(kwargs.get("method_agreement", 1.0)),
         )
@@ -110,4 +116,6 @@ class LevelSetup:
             expected_value_pct=float(row.get("expected_value_pct") or 0),
             strength_score=float(row.get("strength_score") or 0),
             role=str(row.get("role", "UNKNOWN")),
+            optimal_rr=float(row.get("optimal_rr") or 0),
+            exit_win_rate=float(row.get("exit_win_rate") or 0),
         )

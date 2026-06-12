@@ -73,3 +73,12 @@ async def test_on_bar_kill_switch(monkeypatch, monitor):
     closed = await monitor.on_bar("EURUSD", high=1.0810, low=1.0790, close=1.0805)
     assert len(closed) == 1
     assert closed[0].reason == "KILL_SWITCH"
+
+
+@pytest.mark.asyncio
+async def test_paper_mode_skips_broker_close(monitor):
+    monitor.configure(paper_mode=True)
+    monitor.register(_long_position())
+    closed = await monitor.on_bar("EURUSD", high=1.0860, low=1.0790, close=1.0855)
+    assert len(closed) == 1
+    monitor._mock_broker.close_position.assert_not_awaited()

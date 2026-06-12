@@ -33,6 +33,7 @@ from config.agent_config import TRADING_PHILOSOPHY
 from pipeline.confluence_report import ConfluenceReport
 from pipeline.probability_gate import ProbabilityGate
 from pipeline.schemas import FusedFeatureSet, RiskDecision, TradeAction, TradePlan
+from pipeline.level_setup import LevelSetup
 from risk.correlation_checker import get_correlation_checker
 
 logger = logging.getLogger(__name__)
@@ -360,6 +361,123 @@ class RiskEngine:
                 "RiskEngine: REJECTED [%s] | %d reasons | %s",
                 plan.symbol,
                 len(rejections),
+                rejections[0] if rejections else "",
+            )
+
+        return result
+
+    def approve_level_fast_lane(
+        self,
+        plan: TradePlan,
+        level_setup: LevelSetup,
+    ) -> RiskDecision:
+        """
+        Safety-only risk for actionable watchlist fast lane.
+        Skips probability gate, news block, confluence conflict, and soft R:R
+        (R:R already validated on the watchlist row).
+        """
+        rejections: list[str] = []
+
+        kill_active = _env_bool(self._kill_switch_env, False)
+        if kill_active:
+            rejections.append(
+                "KILL SWITCH ACTIVE — set RISK_KILL_SWITCH=false in .env to resume"
+            )
+
+        daily_hit, remaining_pct = self._daily_limiter.is_limit_hit()
+        if daily_hit:
+            limit_usd = self._daily_limiter.daily_loss_limit_usd()
+            rejections.append(
+                f"Daily loss limit hit (${limit_usd:.0f}). Trading suspended for today."
+            )
+
+        current_dd = self._drawdown_monitor.current_drawdown_pct()
+        if self._drawdown_monitor.is_limit_hit():
+            rejections.append(
+                f"Max drawdown {current_dd:.1%} >= limit {self._max_drawdown:.0%}."
+            )
+
+        if self._consecutive_losses >= self._max_consec_losses:
+            rejections.append(
+                f"{self._consecutive_losses} consecutive losses — forced pause."
+            )
+
+        if self._open_positions >= self._max_open:
+            rejections.append(f"Max open positions ({self._max_open}) reached.")
+
+        if plan.action in (TradeAction.DO_NOTHING, TradeAction.WAIT):
+            rejections.append("Plan action is DO_NOTHING or WAIT — no trade.")
+
+        rr_ratio = level_setup.optimal_rr
+        if rr_ratio <= 0 and plan.stop_loss and plan.take_profit and plan.entry_price:
+            risk = abs(plan.entry_price - plan.stop_loss)
+            reward = abs(plan.take_profit - plan.entry_price)
+            rr_ratio = reward / risk if risk > 0 else 0.0
+
+        correlation_factor = 1.0
+        corr_result = self._correlation.check(plan.symbol, _open_position_symbols())
+        if not corr_result["allowed"]:
+            rejections.append(corr_result["reason"])
+        else:
+            correlation_factor = float(corr_result.get("size_factor", 1.0))
+
+        approved = len(rejections) == 0
+        p_success = level_setup.exit_win_rate if level_setup.exit_win_rate > 0 else level_setup.hold_rate
+        ev_dollars = level_setup.expected_value_pct
+        contracts = (
+            self._size_position(
+                p_success,
+                ev_dollars,
+                current_dd,
+                remaining_pct,
+                correlation_factor=correlation_factor,
+            )
+            if approved
+            else 0
+        )
+        max_notional = 0.0
+        if _env_optional_float("RISK_ACCOUNT_CAP_USD") is not None or self._max_order_notional:
+            max_order = self._max_order_notional or (self._account_cap_usd * 0.1)
+            notional_usd = self._estimate_order_notional(plan, contracts)
+            if approved and notional_usd > max_order:
+                rejections.append(
+                    f"Order notional ${notional_usd:.2f} exceeds max ${max_order:.2f}."
+                )
+                approved = False
+            if approved and notional_usd > self._account_cap_usd:
+                rejections.append(
+                    f"Order notional ${notional_usd:.2f} exceeds account cap "
+                    f"${self._account_cap_usd:.0f}."
+                )
+                approved = False
+            max_notional = min(max_order, self._account_cap_usd) if approved else 0.0
+
+        result = RiskDecision(
+            approved=approved,
+            symbol=plan.symbol,
+            timestamp=datetime.now(tz=timezone.utc),
+            position_size_contracts=contracts,
+            max_notional_usd=round(max_notional, 2),
+            risk_reward_ratio=round(rr_ratio, 2),
+            rejection_reasons=rejections,
+            daily_loss_remaining_pct=remaining_pct,
+            drawdown_current_pct=round(current_dd, 4),
+            consecutive_losses=self._consecutive_losses,
+            kill_switch_active=kill_active,
+        )
+
+        if approved:
+            logger.info(
+                "RiskEngine: FAST LANE APPROVED [%s] | contracts=%d RR=%.2f EV=%.3f%%",
+                plan.symbol,
+                contracts,
+                rr_ratio,
+                level_setup.expected_value_pct,
+            )
+        else:
+            logger.info(
+                "RiskEngine: FAST LANE REJECTED [%s] | %s",
+                plan.symbol,
                 rejections[0] if rejections else "",
             )
 
