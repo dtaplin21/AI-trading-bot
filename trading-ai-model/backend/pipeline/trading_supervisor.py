@@ -40,6 +40,7 @@ from pipeline.feature_fusion_news_patch import (
     NewsAgentProtocol,
     fetch_news_features,
 )
+from pipeline.level_setup import LevelSetup
 from pipeline.planner_audit_service import persist_planner_audit
 from pipeline.probability_gate import ProbabilityGate
 from pipeline.schemas import (
@@ -301,8 +302,14 @@ class TradingPipelineSupervisor:
                 signal_rank=fused.signal_rank,
             )
 
+            level_setup = ctx.metadata.get("level_setup")
             if result.risk.approved and should_execute:
-                result.executed = await self._execute(result.plan, result.risk, result.snapshot_id)
+                result.executed = await self._execute(
+                    result.plan,
+                    result.risk,
+                    result.snapshot_id,
+                    level_setup=level_setup if isinstance(level_setup, LevelSetup) else None,
+                )
 
             result.audit = self._build_audit(result)
 
@@ -415,9 +422,17 @@ class TradingPipelineSupervisor:
         plan: TradePlan,
         risk: RiskDecision,
         snapshot_id: str,
+        level_setup: LevelSetup | None = None,
     ) -> bool:
         if plan.action in (TradeAction.DO_NOTHING, TradeAction.WAIT):
             return False
+
+        from config.execution_config import resolve_execution_mode
+
+        if level_setup is not None and resolve_execution_mode() != "paper":
+            from live.live_execution_agent import get_live_execution_agent
+
+            return await get_live_execution_agent().execute_level(level_setup)
 
         if not self.paper:
             logger.info(

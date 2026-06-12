@@ -46,6 +46,19 @@ structlog.configure(
 logger = structlog.get_logger()
 
 
+def _run_broker_health_check() -> None:
+    """Initialize execution brokers early when not in paper mode."""
+    from config.execution_config import resolve_execution_mode
+    from live.broker_router import get_broker_router
+
+    if resolve_execution_mode() == "paper":
+        return
+    results = get_broker_router().health_check()
+    failed = [name for name, ok in results.items() if not ok]
+    if failed:
+        print(f"  Broker health check FAILED: {', '.join(failed)}", file=sys.stderr)
+
+
 async def start_worker() -> None:
     """Background worker: live chart watcher + pipeline (no UI)."""
     from live.broker_adapter import default_worker_broker
@@ -53,6 +66,7 @@ async def start_worker() -> None:
     os.environ.setdefault("WATCHER_MODE", "live")
     broker = default_worker_broker()
     os.environ.setdefault("BROKER", broker)
+    _run_broker_health_check()
 
     print(f"\n{'=' * 55}")
     print("  Trading AI — Background Worker")
@@ -248,6 +262,7 @@ def main() -> None:
         if confirm != "I understand the risk":
             sys.exit(0)
         os.environ["WATCHER_MODE"] = "live"
+        _run_broker_health_check()
 
     print(f"\nTrading AI — {args.mode.upper()}")
 
