@@ -1,15 +1,11 @@
 """
-pipeline/trading_supervisor.py  — FULLY WIRED VERSION
+pipeline/trading_supervisor.py  — FULLY WIRED VERSION (Phase 1 live)
 
-All audit gaps fixed:
-  ✅ TradePlanningAgent replaces 21-line rule stub
-  ✅ Beam Search + Expectimax + MCTS all callable
-  ✅ Unified ProbabilityGate (one check, correct thresholds)
-  ✅ RiskEngine with kill switch + full drawdown wiring
-  ✅ LearningAgent auto-called on trade close (MFE/MAE included)
-  ✅ SessionProbabilityManager default-on
-  ✅ Method agents run concurrently (asyncio.gather)
-  ✅ All env vars read via os.getenv with config fallbacks
+Phase 1 live changes:
+  • LevelEntryGate is the first entry gate — no level, no trade
+  • _execute() calls LiveExecutionAgent.execute_level() for live orders
+  • LivePositionMonitor.on_bar() every bar for TP/SL (live mode)
+  • PaperTrader removed — paper_mode logs only, no simulated fills
 """
 from __future__ import annotations
 
@@ -31,7 +27,6 @@ from agents.news_runtime import bootstrap_news_sync, get_news_agent
 from agents.pipeline_context import PipelineContext
 from learning.learning_agent import LearningAgent
 from mcts.trade_planning_agent import TradePlanningAgent
-from paper_trading.paper_trader import get_paper_trader
 from pipeline.confluence_adapter import prepare_confluence_inputs
 from pipeline.confluence_agent import ConfluenceAgent
 from pipeline.confluence_report import ConfluenceReport
@@ -40,6 +35,7 @@ from pipeline.feature_fusion_news_patch import (
     NewsAgentProtocol,
     fetch_news_features,
 )
+from pipeline.level_entry_gate import LevelEntryGate, _gate_disabled
 from pipeline.level_setup import LevelSetup
 from pipeline.planner_audit_service import persist_planner_audit
 from pipeline.probability_gate import ProbabilityGate
@@ -67,6 +63,7 @@ _UNSET = object()
 class TradingPipelineResult:
     def __init__(self) -> None:
         self.snapshot_id: Optional[str] = None
+        self.level_setup: Optional[LevelSetup] = None
         self.confluence: Optional[ConfluenceReport] = None
         self.fused: Optional[FusedFeatureSet] = None
         self.prediction: Optional[PredictionOutput] = None
@@ -74,6 +71,8 @@ class TradingPipelineResult:
         self.risk: Optional[RiskDecision] = None
         self.audit: Optional[AuditReport] = None
         self.executed: bool = False
+        self.skipped: bool = False
+        self.closed_positions: list = []
         self.errors: list[str] = []
 
 
@@ -116,12 +115,22 @@ class TradingPipelineSupervisor:
         )
         self._feature_pipeline = FeaturePipeline.for_symbol(self.symbol)
         self._feature_store = get_feature_store()
+        self._level_gate = LevelEntryGate(symbol=self.symbol)
+
+        self._live_agent = None
+        self._pos_monitor = None
+        if not paper_mode:
+            from live.live_execution_agent import get_live_execution_agent
+            from live.live_position_monitor import get_position_monitor
+
+            self._live_agent = get_live_execution_agent()
+            self._pos_monitor = get_position_monitor()
 
         logger.info(
-            "Supervisor WIRED | %s %s | paper=%s | news=%s | kill=%s",
+            "Supervisor WIRED | %s %s | mode=%s | news=%s | kill=%s",
             symbol,
             timeframe,
-            paper_mode,
+            "paper" if paper_mode else "LIVE",
             self._news is not None,
             os.getenv("RISK_KILL_SWITCH", "false"),
         )
@@ -139,6 +148,25 @@ class TradingPipelineSupervisor:
         should_execute = self.paper if execute is None else execute
 
         try:
+            if self._pos_monitor:
+                closed = await self._pos_monitor.on_bar(
+                    symbol=self.symbol,
+                    high=bar.high,
+                    low=bar.low,
+                    close=bar.close,
+                )
+                result.closed_positions = closed
+                if closed:
+                    asyncio.create_task(self._log_closes_to_learning(closed))
+
+            level_setup = self._level_gate.check(current_price=bar.close)
+            if level_setup is None and not _gate_disabled():
+                result.skipped = True
+                result.audit = self._build_audit(result)
+                return result
+
+            result.level_setup = level_setup
+
             merged = self._merge_bar(ohlcv, bar)
             if merged is None or len(merged) < 20:
                 result.errors.append("insufficient_ohlcv")
@@ -268,6 +296,8 @@ class TradingPipelineSupervisor:
             ctx.metadata["level_watchlist"] = (
                 watchlist.to_dict("records") if not watchlist.empty else []
             )
+            if level_setup is not None:
+                ctx.metadata["level_setup"] = level_setup
 
             result.plan = self._planner.plan(
                 confluence=result.confluence,
@@ -302,19 +332,15 @@ class TradingPipelineSupervisor:
                 signal_rank=fused.signal_rank,
             )
 
-            level_setup = ctx.metadata.get("level_setup")
             if result.risk.approved and should_execute:
                 result.executed = await self._execute(
                     result.plan,
                     result.risk,
                     result.snapshot_id,
-                    level_setup=level_setup if isinstance(level_setup, LevelSetup) else None,
+                    level_setup=level_setup,
                 )
 
             result.audit = self._build_audit(result)
-
-            if self.paper:
-                get_paper_trader().on_bar(self.symbol, bar.high, bar.low, bar.close)
 
             asyncio.create_task(self._background_logging(result))
 
@@ -427,44 +453,55 @@ class TradingPipelineSupervisor:
         if plan.action in (TradeAction.DO_NOTHING, TradeAction.WAIT):
             return False
 
-        from config.execution_config import resolve_execution_mode
-
-        if level_setup is not None and resolve_execution_mode() != "paper":
-            from live.live_execution_agent import get_live_execution_agent
-
-            return await get_live_execution_agent().execute_level(level_setup)
-
-        if not self.paper:
-            logger.info(
-                "EXECUTE [%s %s]: %s | contracts=%d | live disabled",
-                self.symbol,
-                self.timeframe,
-                plan.action.value,
-                risk.position_size_contracts,
-            )
+        if level_setup is None:
+            logger.debug("%s: no level_setup — execution skipped", self.symbol)
             return False
 
-        order = {
-            "symbol": self.symbol,
-            "action": plan.action.value,
-            "entry": plan.entry_price,
-            "stop": plan.stop_loss,
-            "target": plan.take_profit,
-            "size": risk.position_size_contracts,
-            "snapshot_id": snapshot_id,
-            "timeframe": self.timeframe,
-            "signal_rank": 0,
-        }
-        result = get_paper_trader().execute(order)
+        if self.paper:
+            logger.info(
+                "PAPER (not submitted) | %s %s entry=%.5f tp=%.5f sl=%.5f",
+                level_setup.symbol,
+                level_setup.entry_side,
+                level_setup.entry_price,
+                level_setup.target_price,
+                level_setup.stop_price,
+            )
+            return True
+
+        if self._live_agent is not None:
+            return await self._live_agent.execute_level(level_setup)
+
         logger.info(
-            "EXECUTE [%s %s]: %s | contracts=%d | paper=%s",
+            "EXECUTE [%s %s]: %s | contracts=%d | live agent unavailable",
             self.symbol,
             self.timeframe,
             plan.action.value,
             risk.position_size_contracts,
-            self.paper,
         )
-        return result.get("status") == "filled"
+        return False
+
+    async def _log_closes_to_learning(self, closes) -> None:
+        for close in closes:
+            try:
+                hit_target = close.reason == "TP"
+                hit_stop = close.reason == "SL"
+                self._learning.on_trade_closed(
+                    snapshot_id=close.trade_id,
+                    pnl=close.pnl_pct,
+                    r_multiple=close.pnl_pct / 100.0,
+                    hit_target=hit_target,
+                    hit_stop=hit_stop,
+                    mfe_ticks=0.0,
+                    mae_ticks=0.0,
+                    duration_bars=close.bars_held,
+                    entry_price=0.0,
+                    exit_price=close.exit_price,
+                    symbol=close.symbol,
+                    timeframe=self.timeframe,
+                    signal_rank=0,
+                )
+            except Exception as exc:
+                logger.debug("Learning close log failed for %s: %s", close.trade_id, exc)
 
     async def _background_logging(self, result: TradingPipelineResult) -> None:
         if result.confluence:

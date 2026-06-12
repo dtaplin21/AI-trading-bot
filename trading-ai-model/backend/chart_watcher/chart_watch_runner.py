@@ -158,12 +158,13 @@ class ChartWatchRunner:
         self._running = True
         self._started_at = datetime.now(tz=timezone.utc)
 
+        paper_mode = self._mode != WatcherMode.LIVE
         for sym in SYMBOLS:
             self._supervisors[sym] = TradingPipelineSupervisor(
                 symbol=sym,
                 timeframe=TIMEFRAMES[0],
                 news_agent=self._news,
-                paper_mode=True,
+                paper_mode=paper_mode,
             )
 
         await self._start_news()
@@ -673,29 +674,6 @@ class ChartWatchRunner:
                 "ChartWatchRunner: pipeline exception [%s]: %s",
                 bar.symbol,
                 e,
-                exc_info=True,
-            )
-
-        try:
-            from live.live_position_monitor import get_position_monitor
-
-            closed = await get_position_monitor().on_bar(
-                bar.symbol, bar.high, bar.low, bar.close
-            )
-            for close_result in closed:
-                logger.info(
-                    "LIVE POSITION CLOSED [%s] %s | %s pnl=%.3f%% bars=%d",
-                    close_result.symbol,
-                    close_result.trade_id,
-                    close_result.reason,
-                    close_result.pnl_pct,
-                    close_result.bars_held,
-                )
-        except Exception as exc:
-            logger.error(
-                "ChartWatchRunner: position monitor [%s]: %s",
-                bar.symbol,
-                exc,
                 exc_info=True,
             )
 

@@ -11,7 +11,8 @@ from tests.fixtures.sample_ohlcv import sample_ohlcv
 
 
 @pytest.fixture
-def pipeline_supervisor():
+def pipeline_supervisor(monkeypatch):
+    monkeypatch.setenv("LEVEL_GATE_DISABLED", "true")
     return TradingPipelineSupervisor("MES", "5m", news_agent=None, paper_mode=True)
 
 
