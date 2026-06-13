@@ -26,7 +26,7 @@ import numpy as np
 import pandas as pd
 
 from agents.chart_reading_agent import ChartReadingAgent
-from agents.method_agents import ALL_METHOD_AGENTS, get_confirm_method_agents_from_registry
+from agents.method_agents import ALL_METHOD_AGENTS, get_confirm_method_agents_from_registry, get_all_method_agents_from_registry
 from agents.news.market_news_agent import MarketNewsAgent
 from agents.news_runtime import bootstrap_news_sync, get_news_agent
 from agents.pipeline_context import PipelineContext
@@ -434,7 +434,7 @@ class TradingPipelineSupervisor:
         self._risk_eng.close_position()
 
     async def _run_methods_concurrent(self, ctx: PipelineContext, agents=None) -> None:
-        method_agents = agents if agents is not None else ALL_METHOD_AGENTS
+        method_agents = agents if agents is not None else get_all_method_agents_from_registry(self.symbol)
 
         async def run_one(agent):
             def _run():

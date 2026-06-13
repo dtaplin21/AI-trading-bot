@@ -19,14 +19,15 @@ async def main():
     @server.list_tools()
     async def list_tools():
         return [
+            # ── Agent admin ───────────────────────────────────────────────
             types.Tool(
                 name="list_agents",
-                description="List all agents in the registry with their enabled state.",
+                description="List all agents in the registry with enabled state and config.",
                 inputSchema={"type": "object", "properties": {}},
             ),
             types.Tool(
                 name="get_pipeline_status",
-                description="Current pipeline status: kill switch, open positions.",
+                description="Pipeline status: kill switch, paper mode, open positions.",
                 inputSchema={"type": "object", "properties": {}},
             ),
             types.Tool(
@@ -36,50 +37,90 @@ async def main():
                     "type": "object",
                     "properties": {
                         "agent_id": {"type": "string"},
-                        "enabled":  {"type": "boolean"},
+                        "enabled": {"type": "boolean"},
                     },
                     "required": ["agent_id"],
                 },
             ),
             types.Tool(
                 name="reload_config",
-                description="Reload agents.yaml from disk.",
+                description="Reload agents.yaml from disk and clear registry cache.",
                 inputSchema={"type": "object", "properties": {}},
+            ),
+            # ── Level intelligence ────────────────────────────────────────
+            types.Tool(
+                name="get_level_watchlist",
+                description="Actionable DB levels for a symbol: price, role, TP/SL, EV, R:R.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"symbol": {"type": "string"}},
+                    "required": ["symbol"],
+                },
+            ),
+            types.Tool(
+                name="check_level_gate",
+                description="Would this price pass the level entry gate for this symbol?",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "symbol": {"type": "string"},
+                        "price": {"type": "number"},
+                    },
+                    "required": ["symbol", "price"],
+                },
+            ),
+            types.Tool(
+                name="get_recent_touches",
+                description="Last N level touches for a symbol from level_touches table.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "symbol": {"type": "string"},
+                        "limit": {"type": "integer"},
+                    },
+                    "required": ["symbol"],
+                },
+            ),
+            # ── Risk / ops ────────────────────────────────────────────────
+            types.Tool(
+                name="get_risk_summary",
+                description="Kill switch state, daily loss caps, open positions, size limits.",
+                inputSchema={"type": "object", "properties": {}},
+            ),
+            types.Tool(
+                name="set_kill_switch",
+                description="Enable or disable the kill switch for this MCP process.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"enabled": {"type": "boolean"}},
+                    "required": ["enabled"],
+                },
             ),
         ]
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict):
+        # ── Agent admin ───────────────────────────────────────────────────
         if name == "list_agents":
             try:
                 from agents.registry import get_agent_registry
+
                 reg = get_agent_registry()
                 return [types.TextContent(type="text", text=json.dumps(reg.catalog(), indent=2))]
             except Exception as e:
                 return [types.TextContent(type="text", text=json.dumps({"error": str(e)}))]
 
         elif name == "get_pipeline_status":
-            kill = os.getenv("RISK_KILL_SWITCH", "false")
-            open_positions = []
-            try:
-                from live.live_position_monitor import get_position_monitor
-                open_positions = [
-                    {"trade_id": p.trade_id, "symbol": p.symbol, "side": p.side}
-                    for p in get_position_monitor().open_positions()
-                ]
-            except Exception:
-                pass
-            return [types.TextContent(type="text", text=json.dumps({
-                "kill_switch": kill,
-                "paper_mode": os.getenv("PAPER_MODE", "true"),
-                "open_positions": open_positions,
-            }, indent=2))]
+            from trading_mcp.tools.risk import get_risk_summary
+
+            return [types.TextContent(type="text", text=await get_risk_summary())]
 
         elif name == "set_agent_config":
             agent_id = arguments.get("agent_id", "")
-            enabled  = arguments.get("enabled")
+            enabled = arguments.get("enabled")
             try:
                 from agents.registry import get_agent_registry
+
                 reg = get_agent_registry()
                 cfg = reg._manifest.get(agent_id)
                 if cfg is None:
@@ -95,11 +136,62 @@ async def main():
             try:
                 from agents.registry import reset_registries
                 from trading_mcp.config_loader import reload_manifest
+
                 reload_manifest()
                 reset_registries()
                 return [types.TextContent(type="text", text="Reloaded.")]
             except Exception as e:
                 return [types.TextContent(type="text", text=f"Error: {e}")]
+
+        # ── Level intelligence ────────────────────────────────────────────
+        elif name == "get_level_watchlist":
+            from trading_mcp.tools.levels import get_level_watchlist
+
+            return [
+                types.TextContent(
+                    type="text",
+                    text=await get_level_watchlist(arguments["symbol"]),
+                )
+            ]
+
+        elif name == "check_level_gate":
+            from trading_mcp.tools.levels import check_level_gate
+
+            return [
+                types.TextContent(
+                    type="text",
+                    text=await check_level_gate(arguments["symbol"], float(arguments["price"])),
+                )
+            ]
+
+        elif name == "get_recent_touches":
+            from trading_mcp.tools.levels import get_recent_touches
+
+            return [
+                types.TextContent(
+                    type="text",
+                    text=await get_recent_touches(
+                        arguments["symbol"],
+                        int(arguments.get("limit", 20)),
+                    ),
+                )
+            ]
+
+        # ── Risk / ops ────────────────────────────────────────────────────
+        elif name == "get_risk_summary":
+            from trading_mcp.tools.risk import get_risk_summary
+
+            return [types.TextContent(type="text", text=await get_risk_summary())]
+
+        elif name == "set_kill_switch":
+            from trading_mcp.tools.risk import set_kill_switch
+
+            return [
+                types.TextContent(
+                    type="text",
+                    text=await set_kill_switch(bool(arguments["enabled"])),
+                )
+            ]
 
         return [types.TextContent(type="text", text=f"Unknown tool: {name}")]
 

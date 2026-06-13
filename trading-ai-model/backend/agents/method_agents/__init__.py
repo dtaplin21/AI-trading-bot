@@ -90,3 +90,25 @@ def get_confirm_method_agents_from_registry(symbol: str = "") -> list:
         if method and method in by_name:
             fallback.append(by_name[method])
     return fallback or ALL_METHOD_AGENTS[:6]
+
+
+def get_all_method_agents_from_registry(symbol: str = "") -> list:
+    """
+    Return ALL method agents filtered by agents.yaml enabled state.
+    Used by the full pipeline path in TradingPipelineSupervisor.
+    Falls back to ALL_METHOD_AGENTS if registry fails.
+    """
+    try:
+        from agents.registry import get_agent_registry
+
+        reg = get_agent_registry(symbol=symbol)
+        agents = reg.get_method_agents()
+        if agents:
+            return agents
+    except Exception as e:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Registry unavailable, falling back to ALL_METHOD_AGENTS: %s", e
+        )
+    return ALL_METHOD_AGENTS
