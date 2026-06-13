@@ -11,6 +11,13 @@ import os
 import uuid
 from typing import Optional
 
+from config.coinbase_symbols import is_coinbase_tradable
+from config.execution_config import (
+    coinbase_live_allowed,
+    oanda_live_allowed,
+    resolve_execution_mode,
+)
+from config.oanda_symbols import is_oanda_tradable
 from config.settings import get_settings
 from data.storage.pg_connect import connect_psycopg2, is_database_url_placeholder
 from live.broker_router import get_broker_router
@@ -122,6 +129,21 @@ class LiveExecutionAgent:
     async def execute_level(self, setup: LevelSetup) -> bool:
         if _kill_switch():
             logger.warning("KILL SWITCH ACTIVE — blocking order for %s", setup.symbol)
+            return False
+
+        if resolve_execution_mode() == "paper":
+            logger.warning(
+                "%s: live execution blocked — PAPER_TRADING_ENABLED or live flags not set",
+                setup.symbol,
+            )
+            return False
+
+        symbol = setup.symbol.upper()
+        if is_coinbase_tradable(symbol) and not coinbase_live_allowed():
+            logger.warning("%s: Coinbase live not enabled", symbol)
+            return False
+        if is_oanda_tradable(symbol) and not oanda_live_allowed():
+            logger.warning("%s: OANDA live not enabled", symbol)
             return False
 
         open_count = len(self._monitor.open_positions())

@@ -1,4 +1,5 @@
-"""live/order_router.py"""
+"""Order router — delegates to BrokerRouter + broker adapters."""
+
 from __future__ import annotations
 
 import logging
@@ -6,33 +7,10 @@ import os
 import uuid
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+from live.broker_router import SYMBOL_BROKER, get_broker_router
+from live.sync_broker import action_to_side, run_broker
 
-SYMBOL_BROKER = {
-    "MES": "tradovate",
-    "ES": "tradovate",
-    "MNQ": "tradovate",
-    "NQ": "tradovate",
-    "CL": "tradovate",
-    "GC": "tradovate",
-    "ZB": "tradovate",
-    "RTY": "tradovate",
-    "EURUSD": "oanda",
-    "GBPUSD": "oanda",
-    "USDJPY": "oanda",
-    "USDCHF": "oanda",
-    "AUDUSD": "oanda",
-    "BTCUSD": "coinbase",
-    "ETHUSD": "coinbase",
-    "SOLUSD": "coinbase",
-    "BNBUSD": "coinbase",
-    "XRPUSD": "coinbase",
-    "TSLA": "alpaca",
-    "NVDA": "alpaca",
-    "AAPL": "alpaca",
-    "MSFT": "alpaca",
-    "AMZN": "alpaca",
-}
+logger = logging.getLogger(__name__)
 
 
 class OrderRouter:
@@ -53,16 +31,15 @@ class OrderRouter:
         order_type: str = "market",
         price: Optional[float] = None,
     ) -> dict:
-        """Route and submit an order."""
         sym = symbol.upper()
-        broker = SYMBOL_BROKER.get(sym, "unknown")
+        broker_name = SYMBOL_BROKER.get(sym, "unknown")
         order = {
             "symbol": sym,
             "side": side,
             "size": size,
             "type": order_type,
             "price": price,
-            "broker": broker,
+            "broker": broker_name,
             "paper_mode": self.paper_mode,
         }
 
@@ -77,34 +54,47 @@ class OrderRouter:
                 size,
                 order_type,
                 price or "market",
-                broker,
+                broker_name,
             )
             return order
 
         try:
-            return self._route_live(order, broker)
+            return self._route_live(order, sym, side, size, order_type, price)
         except Exception as e:
             logger.error("OrderRouter: failed to submit %s %s: %s", side, sym, e)
             order["status"] = "failed"
             order["error"] = str(e)
             return order
 
-    def _route_live(self, order: dict, broker: str) -> dict:
-        signal = {
-            "symbol": order["symbol"],
-            "action": "enter_long" if order["side"] == "buy" else "enter_short",
-            "size": order["size"],
-            "entry": order.get("price"),
-        }
-        if broker == "oanda":
-            from live.oanda_executor import OandaExecutor
+    def _route_live(
+        self,
+        order: dict,
+        symbol: str,
+        side: str,
+        size: float,
+        order_type: str,
+        price: Optional[float],
+    ) -> dict:
+        if symbol not in SYMBOL_BROKER:
+            raise NotImplementedError(f"No broker mapped for symbol: {symbol}")
 
-            return OandaExecutor().execute(signal)
-        if broker == "coinbase":
-            from live.coinbase_executor import CoinbaseExecutor
-
-            return CoinbaseExecutor().execute(signal)
-        raise NotImplementedError(f"No live executor for broker: {broker}")
+        broker_side = action_to_side("buy" if side.lower() == "buy" else "sell")
+        otype = "MARKET" if order_type.lower() == "market" else "LIMIT"
+        broker = get_broker_router().get(symbol)
+        result = run_broker(
+            broker.place_order(
+                symbol=symbol,
+                side=broker_side,
+                quantity=size,
+                order_type=otype,
+                limit_price=price,
+            )
+        )
+        order["status"] = "filled" if result.status == "FILLED" else result.status.lower()
+        order["order_id"] = result.broker_order_id
+        if result.error_message:
+            order["error"] = result.error_message
+        return order
 
     @property
     def order_log(self) -> list[dict]:

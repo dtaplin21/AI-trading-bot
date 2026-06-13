@@ -1,53 +1,31 @@
 """
-Coinbase Advanced Trade execution — live crypto only.
+Coinbase execution facade — delegates to live.brokers.coinbase_broker.CoinbaseBroker.
 
-Gated by config.execution_config.coinbase_live_allowed() (paper off + COINBASE_LIVE_ENABLED).
+Gated by config.execution_config.coinbase_live_allowed().
+Kept for agents/execution_agent.py and legacy signal-dict callers.
 """
 
 from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any, Optional
+from typing import Optional
 
-from config.coinbase_symbols import is_coinbase_tradable, to_product_id
+from config.coinbase_symbols import is_coinbase_tradable
 from config.execution_config import coinbase_live_allowed
 from config.settings import get_settings
+from live.broker_router import get_broker_router
+from live.sync_broker import action_to_side, broker_order_to_result, run_broker
 
 logger = logging.getLogger(__name__)
 
-_client: Any = None
-
-
-def _get_client():
-    global _client
-    if _client is not None:
-        return _client
-    settings = get_settings()
-    try:
-        from coinbase.rest import RESTClient
-    except ImportError as e:
-        raise RuntimeError(
-            "coinbase-advanced-py not installed — pip install coinbase-advanced-py"
-        ) from e
-
-    if settings.coinbase_api_key_file:
-        _client = RESTClient(key_file=settings.coinbase_api_key_file)
-    else:
-        _client = RESTClient(
-            api_key=settings.coinbase_api_key,
-            api_secret=settings.coinbase_api_secret,
-        )
-    return _client
-
 
 def reset_coinbase_client() -> None:
-    global _client
-    _client = None
+    """No-op — broker is lazy via BrokerRouter; kept for test compatibility."""
 
 
 class CoinbaseExecutor:
-    """Place spot crypto orders via Coinbase Advanced Trade API."""
+    """Sync facade over CoinbaseBroker for legacy signal-dict API."""
 
     def __init__(self) -> None:
         self._settings = get_settings()
@@ -66,85 +44,65 @@ class CoinbaseExecutor:
                 "message": f"{symbol} not supported on Coinbase (crypto only)",
             }
 
-        product_id = to_product_id(symbol)
-        if not product_id:
-            return {"status": "error", "message": f"no product_id for {symbol}"}
+        try:
+            side = action_to_side(str(signal.get("action", "")))
+        except ValueError as exc:
+            return {"status": "error", "message": str(exc)}
 
-        action = str(signal.get("action", "")).lower()
         quote_size = signal.get("quote_size_usd") or signal.get("notional_usd")
+        entry = float(signal.get("entry") or 0)
         if quote_size is None:
-            entry = float(signal.get("entry") or 0)
             size = max(1, int(signal.get("size") or 1))
             quote_size = min(
                 float(self._settings.coinbase_max_order_usd),
-                entry * size if entry > 0 else self._settings.coinbase_max_order_usd,
+                entry * size if entry > 0 else float(self._settings.coinbase_max_order_usd),
             )
         quote_size = min(float(quote_size), float(self._settings.coinbase_max_order_usd))
         if quote_size <= 0:
             return {"status": "error", "message": "invalid quote_size"}
 
-        client_order_id = str(uuid.uuid4())
-        portfolio_id = self._settings.coinbase_portfolio_id or None
+        if entry > 0:
+            quantity = quote_size / entry
+        else:
+            quantity = float(signal.get("size") or 0)
+        if quantity <= 0:
+            return {"status": "error", "message": "invalid quantity"}
 
+        client_ref = str(uuid.uuid4())
         try:
-            client = _get_client()
-            kwargs = {}
-            if portfolio_id:
-                kwargs["retail_portfolio_id"] = portfolio_id
-
-            if "long" in action or action in ("buy", "enter_long"):
-                order = client.market_order_buy(
-                    client_order_id=client_order_id,
-                    product_id=product_id,
-                    quote_size=f"{quote_size:.2f}",
-                    **kwargs,
+            broker = get_broker_router().get(symbol)
+            order = run_broker(
+                broker.place_order(
+                    symbol=symbol,
+                    side=side,
+                    quantity=quantity,
+                    order_type="MARKET",
+                    client_ref=client_ref,
                 )
-            elif "short" in action or action in ("sell", "enter_short"):
-                order = client.market_order_sell(
-                    client_order_id=client_order_id,
-                    product_id=product_id,
-                    quote_size=f"{quote_size:.2f}",
-                    **kwargs,
-                )
-            else:
-                return {"status": "error", "message": f"unsupported action {action}"}
+            )
+        except Exception as exc:
+            logger.exception("CoinbaseExecutor: %s", exc)
+            return {"status": "error", "message": str(exc)}
 
-            success = getattr(order, "success", None)
-            if success is None and hasattr(order, "to_dict"):
-                success = order.to_dict().get("success")
-            if success:
-                resp = getattr(order, "success_response", None) or {}
-                if hasattr(resp, "order_id"):
-                    order_id = resp.order_id
-                elif isinstance(resp, dict):
-                    order_id = resp.get("order_id", client_order_id)
-                else:
-                    order_id = client_order_id
-                logger.info(
-                    "CoinbaseExecutor: %s %s quote=$%.2f order_id=%s",
-                    action,
-                    product_id,
-                    quote_size,
-                    order_id,
-                )
-                from risk.risk_runtime import get_risk_engine
+        if order.status in ("REJECTED", "ERROR"):
+            return {"status": "rejected", "message": order.error_message or "order_failed"}
 
-                get_risk_engine().open_position()
-                return {
-                    "status": "filled",
-                    "broker": "coinbase",
-                    "order_id": order_id,
-                    "product_id": product_id,
-                    "quote_size_usd": quote_size,
-                }
+        from risk.risk_runtime import get_risk_engine
 
-            err = getattr(order, "error_response", None) or "order_failed"
-            logger.warning("CoinbaseExecutor: order failed %s", err)
-            return {"status": "rejected", "message": str(err)}
-
-        except Exception as e:
-            logger.exception("CoinbaseExecutor: %s", e)
-            return {"status": "error", "message": str(e)}
+        get_risk_engine().open_position()
+        result = broker_order_to_result(
+            order,
+            broker="coinbase",
+            quote_size_usd=quote_size,
+        )
+        logger.info(
+            "CoinbaseExecutor: %s %s quote=$%.2f order_id=%s",
+            side,
+            symbol,
+            quote_size,
+            result.get("order_id"),
+        )
+        return result
 
 
 _executor: Optional[CoinbaseExecutor] = None

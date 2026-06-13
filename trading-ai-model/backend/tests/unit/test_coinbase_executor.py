@@ -1,10 +1,11 @@
 """Coinbase executor — blocked when live not enabled."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from config.settings import Settings
+from live.brokers.base_broker import BrokerOrder
 from live.coinbase_executor import CoinbaseExecutor, reset_coinbase_client
 
 
@@ -34,26 +35,39 @@ def test_market_buy_when_live(monkeypatch):
     monkeypatch.setenv("COINBASE_API_KEY", "test-key")
     monkeypatch.setenv("COINBASE_API_SECRET", "test-secret")
     ex = CoinbaseExecutor()
-    mock_client = MagicMock()
-    mock_order = MagicMock(success=True, success_response=MagicMock(order_id="ord-1"))
-    mock_client.market_order_buy.return_value = mock_order
+    mock_broker = MagicMock()
+    mock_broker.place_order = AsyncMock(
+        return_value=BrokerOrder(
+            broker_order_id="ord-1",
+            symbol="BTCUSD",
+            side="BUY",
+            quantity=0.001,
+            order_type="MARKET",
+            status="FILLED",
+        )
+    )
+    mock_router = MagicMock()
+    mock_router.get.return_value = mock_broker
 
     with patch("live.coinbase_executor.coinbase_live_allowed", return_value=True):
-        with patch("live.coinbase_executor._get_client", return_value=mock_client):
+        with patch("live.coinbase_executor.get_broker_router", return_value=mock_router):
             with patch("live.coinbase_executor.get_settings") as gs:
                 gs.return_value = Settings(
                     paper_trading_enabled=False,
                     coinbase_live_enabled=True,
                     coinbase_max_order_usd=50,
                 )
-                result = ex.execute(
-                    {
-                        "symbol": "BTCUSD",
-                        "action": "enter_long",
-                        "quote_size_usd": 40,
-                    }
-                )
+                with patch("risk.risk_runtime.get_risk_engine") as gre:
+                    gre.return_value = MagicMock()
+                    result = ex.execute(
+                        {
+                            "symbol": "BTCUSD",
+                            "action": "enter_long",
+                            "quote_size_usd": 40,
+                            "entry": 40000.0,
+                        }
+                    )
 
     assert result["status"] == "filled"
     assert result["order_id"] == "ord-1"
-    mock_client.market_order_buy.assert_called_once()
+    mock_broker.place_order.assert_called_once()

@@ -31,3 +31,24 @@ ALL_METHOD_AGENTS = [
 ]
 
 REQUIRED_METHODS = {agent.method_name for agent in ALL_METHOD_AGENTS}
+
+
+def get_method_agents_from_registry(symbol: str = "") -> list:
+    """
+    Return method agents filtered by agents.yaml enabled state.
+    Falls back to ALL_METHOD_AGENTS if registry fails.
+    """
+    try:
+        from agents.registry import get_agent_registry
+
+        reg = get_agent_registry(symbol=symbol)
+        agents = reg.get_method_agents()
+        if agents:
+            return agents
+    except Exception as e:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Registry unavailable, using ALL_METHOD_AGENTS: %s", e
+        )
+    return ALL_METHOD_AGENTS

@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "trading-agents": {
+      "command": "/Users/dtaplin21/AI-trading-bot/trading-ai-model/backend/.venv/bin/python",
+      "args": ["-m", "trading_mcp.trading_server"],
+      "cwd": "/Users/dtaplin21/AI-trading-bot/trading-ai-model/backend",
+      "env": {
+        "AGENT_CONFIG_PATH": "config/agents.yaml",
+        "PAPER_MODE": "true",
+        "RISK_KILL_SWITCH": "true"
+      }
+    }
+  }
+}

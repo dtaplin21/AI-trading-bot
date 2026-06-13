@@ -1,0 +1,188 @@
+agents:
+
+  # ── Method agents ──────────────────────────────────────────────────────────
+  method_level_369:
+    enabled: true
+    transport: local
+    timeout_ms: 2000
+    config:
+      weight: 0.10
+
+  method_fibonacci:
+    enabled: true
+    transport: local
+    timeout_ms: 2000
+    config:
+      weight: 0.10
+
+  method_ancient_number:
+    enabled: true
+    transport: local
+    timeout_ms: 2000
+    config:
+      weight: 0.05
+
+  method_gann:
+    enabled: true
+    transport: local
+    timeout_ms: 2000
+    config:
+      weight: 0.02
+
+  method_elliott:
+    enabled: true
+    transport: local
+    timeout_ms: 2000
+    config:
+      weight: 0.10
+
+  method_harmonic:
+    enabled: true
+    transport: local
+    timeout_ms: 2000
+    config:
+      weight: 0.15
+
+  method_candlestick:
+    enabled: true
+    transport: local
+    timeout_ms: 2000
+    config:
+      weight: 0.15
+
+  method_fractal:
+    enabled: true
+    transport: local
+    timeout_ms: 2000
+    config:
+      weight: 0.07
+
+  method_balance_line:
+    enabled: true
+    transport: local
+    timeout_ms: 2000
+    config:
+      weight: 0.05
+
+  method_momentum:
+    enabled: true
+    transport: local
+    timeout_ms: 2000
+    config:
+      weight: 0.10
+
+  method_markov:
+    enabled: true
+    transport: local
+    timeout_ms: 2000
+    config:
+      weight: 0.12
+
+  method_monte_carlo:
+    enabled: true
+    transport: local
+    timeout_ms: 3000
+    config:
+      weight: 0.06
+      simulations: 500
+
+  method_strategy_math:
+    enabled: true
+    transport: local
+    timeout_ms: 2000
+    config:
+      weight: 0.08
+
+  # ── Pipeline agents ────────────────────────────────────────────────────────
+  market_data:
+    enabled: true
+    transport: local
+    timeout_ms: 3000
+    config: {}
+
+  chart_reading:
+    enabled: true
+    transport: local
+    timeout_ms: 3000
+    config: {}
+
+  confluence:
+    enabled: true
+    transport: local
+    timeout_ms: 2000
+    config:
+      confluence_minimum_methods: 3
+      max_conflict_score: 0.45
+
+  feature_fusion:
+    enabled: true
+    transport: local
+    timeout_ms: 2000
+    config: {}
+
+  prediction:
+    enabled: true
+    transport: local
+    timeout_ms: 5000
+    config:
+      probability_minimum: 0.55
+
+  trade_planning:
+    enabled: true
+    transport: local
+    timeout_ms: 5000
+    config:
+      beam_width: 4
+      min_rollouts: 500
+
+  risk:
+    enabled: true
+    transport: local
+    timeout_ms: 2000
+    config:
+      max_open_positions: 3
+      max_daily_loss_pct: 2.0
+      min_rr_ratio: 1.5
+      consecutive_loss_limit: 4
+
+  execution:
+    enabled: true
+    transport: local
+    timeout_ms: 10000
+    config:
+      paper_mode: true
+
+  learning:
+    enabled: true
+    transport: local
+    timeout_ms: 3000
+    config: {}
+
+  audit:
+    enabled: true
+    transport: local
+    timeout_ms: 1000
+    config: {}
+
+  news:
+    enabled: true
+    transport: local
+    timeout_ms: 3000
+    config:
+      max_age_minutes: 120
+
+  position_monitor:
+    enabled: true
+    transport: local
+    timeout_ms: 2000
+    config:
+      max_bars_held: 100
+
+  level_entry_gate:
+    enabled: true
+    transport: local
+    timeout_ms: 1000
+    config:
+      min_touches_trade: 10
+      min_ev_pct: 0.0
+      proximity_pct: 0.3

@@ -63,3 +63,14 @@ async def test_execute_level_kill_switch(monkeypatch):
     agent = LiveExecutionAgent()
     ok = await agent.execute_level(_setup())
     assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_execute_level_blocked_in_paper_mode(monkeypatch):
+    reset_live_execution_agent()
+    reset_position_monitor()
+    monkeypatch.setenv("RISK_KILL_SWITCH", "false")
+    monkeypatch.setenv("PAPER_TRADING_ENABLED", "true")
+    agent = LiveExecutionAgent()
+    ok = await agent.execute_level(_setup())
+    assert ok is False

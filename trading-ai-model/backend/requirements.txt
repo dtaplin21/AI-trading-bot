@@ -47,6 +47,10 @@ coinbase-advanced-py>=1.8.0
 # pandas-ta: pip install -r requirements-ta.txt  (or pip install -e ".[ta]")
 python-dotenv>=1.0.0   # .env loading
 
+# ── MCP + agent config ────────────────────────────────────────
+mcp                    # Model Context Protocol — agent tooling
+pyyaml>=6.0.0          # Agent manifest (config/agents.yaml)
+
 # ── Utilities ─────────────────────────────────────────────────
 structlog>=24.1.0      # Structured JSON logging
 tenacity>=8.2.0        # Retry logic

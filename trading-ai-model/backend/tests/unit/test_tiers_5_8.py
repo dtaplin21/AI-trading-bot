@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
 
 from engines.symbol_intelligence.session_analyzer import SessionAnalyzer
-from live.execution_monitor import ExecutionMonitor
+from live.live_position_monitor import LivePosition, LivePositionMonitor
 from live.order_router import OrderRouter
 from mcts.policy_network import PolicyNetwork
 from mcts.state_evaluator import StateEvaluator
@@ -88,12 +89,27 @@ def test_session_analyzer_overlap():
     assert sa.is_symbol_active("MES", dt) is True
 
 
-def test_execution_monitor_limit_fill():
-    mon = ExecutionMonitor()
-    mon.register_order("o1", {"symbol": "MES", "side": "buy", "type": "limit", "price": 100.0})
-    filled = mon.check_fills({"MES": 99.5})
-    assert len(filled) == 1
-    assert mon.open_count == 0
+def test_position_monitor_tp_hit():
+    monitor = LivePositionMonitor()
+    monitor.configure(paper_mode=True)
+    monitor.register(
+        LivePosition(
+            trade_id="t1",
+            symbol="EURUSD",
+            side="LONG",
+            entry_price=1.0843,
+            target_price=1.0873,
+            stop_price=1.0830,
+            quantity=1000.0,
+            broker_order_id="paper",
+        )
+    )
+    closed = asyncio.run(
+        monitor.on_bar(symbol="EURUSD", high=1.0880, low=1.0840, close=1.0875)
+    )
+    assert len(closed) == 1
+    assert closed[0].reason == "TP"
+    assert len(monitor.open_positions()) == 0
 
 
 def test_order_router_paper_mode(monkeypatch):
@@ -101,4 +117,4 @@ def test_order_router_paper_mode(monkeypatch):
     router = OrderRouter()
     order = router.submit("MES", "buy", 1.0, order_type="market")
     assert order["status"] == "paper_submitted"
-    assert order["broker"] == "tradovate"
+    assert order["broker"] == "webull"
