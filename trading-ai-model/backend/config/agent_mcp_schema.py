@@ -8,15 +8,20 @@ from pydantic import BaseModel, Field
 
 
 class AgentMcpConfig(BaseModel):
+    """One agent entry in agents.yaml.
+
+    transport=local — import Python class from agents.registry.AGENT_MAP.
+    transport=mcp   — spawn mcp_server (JSON: command, args, cwd, env) and call mcp_tool.
+    """
+
     enabled: bool = True
     transport: Literal["local", "mcp"] = "local"
-    mcp_server: Optional[str] = None
+    mcp_server: Optional[str] = None  # JSON stdio launch spec when transport=mcp
     timeout_ms: int = 5000
     config: Dict[str, Any] = Field(default_factory=dict)
     agent_id: str = ""
 
-    class Config:
-        extra = "allow"
+    model_config = {"extra": "allow"}
 
 
 class AgentManifest(BaseModel):

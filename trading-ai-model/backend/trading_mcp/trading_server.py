@@ -13,10 +13,9 @@ def _save_manifest(manifest) -> None:
     """Write current manifest state back to agents.yaml."""
     import yaml
 
-    config_path = os.getenv(
-        "AGENT_CONFIG_PATH",
-        "/Users/dtaplin21/AI-trading-bot/trading-ai-model/backend/config/agents.yaml",
-    )
+    from trading_mcp.config_loader import get_config_path
+
+    config_path = get_config_path()
     data = {"agents": {}}
     for agent_id, cfg in manifest.agents.items():
         data["agents"][agent_id] = {
@@ -37,6 +36,30 @@ async def main():
     import mcp.types as types
 
     server = Server("trading-agents")
+
+    @server.list_resources()
+    async def list_resources():
+        from trading_mcp.config_loader import AGENTS_YAML_RESOURCE_URI
+
+        return [
+            types.Resource(
+                uri=AGENTS_YAML_RESOURCE_URI,
+                name="agents.yaml",
+                description="Agent manifest: enabled flags, transport, timeouts, MCP servers.",
+                mimeType="text/yaml",
+            )
+        ]
+
+    @server.read_resource()
+    async def read_resource(uri):
+        from trading_mcp.config_loader import AGENTS_YAML_RESOURCE_URI, get_config_path
+
+        if str(uri) != AGENTS_YAML_RESOURCE_URI:
+            raise ValueError(f"Unknown resource: {uri}")
+        path = get_config_path()
+        if not path.exists():
+            return "# agents.yaml not found\n"
+        return path.read_text()
 
     @server.list_tools()
     async def list_tools():

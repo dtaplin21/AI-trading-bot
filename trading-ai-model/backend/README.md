@@ -107,6 +107,40 @@ OANDA_PRACTICE=true
 
 Live forex orders require: paper off, `OANDA_LIVE_ENABLED`, API key, and `oanda` in `ENABLED_BROKERS`. With both Coinbase and OANDA enabled, execution routes by symbol (crypto → Coinbase, forex → OANDA).
 
+### MCP server (Cursor / agent tooling)
+
+The `trading-agents` MCP server exposes registry admin, level intelligence, and risk tools. Configure it in **Cursor → Settings → MCP** (workspace file: `.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "trading-agents": {
+      "command": "/absolute/path/to/backend/.venv/bin/python",
+      "args": ["-m", "trading_mcp.trading_server"],
+      "cwd": "/absolute/path/to/backend",
+      "env": {
+        "PYTHONPATH": "/absolute/path/to/backend",
+        "AGENT_CONFIG_PATH": "/absolute/path/to/backend/config/agents.yaml",
+        "DATABASE_URL": "postgresql://...",
+        "DATABASE_SSL_DISABLE": "true",
+        "PAPER_MODE": "true",
+        "RISK_KILL_SWITCH": "false"
+      }
+    }
+  }
+}
+```
+
+Copy `DATABASE_URL` from `backend/.env`. Restart the MCP server after config changes.
+
+**Tools:** `list_agents`, `set_agent_config`, `reload_config`, `get_level_watchlist`, `check_level_gate`, `get_recent_touches`, `get_risk_summary`, `set_kill_switch`, `get_pipeline_status`.
+
+**Resources:** `file:///agents.yaml` — read-only view of the agent manifest.
+
+**Remote agents (`transport: mcp`):** In `config/agents.yaml`, set `transport: mcp` and `mcp_server` to a JSON stdio launch spec. The remote server must expose tool `run_method` (or override via `config.mcp_tool`) returning `MethodOutput` JSON. The pipeline registry instantiates `RemoteAgentProxy` instead of a local class.
+
+Per-agent env overrides: `AGENT_{AGENT_ID}_ENABLED`, `AGENT_{AGENT_ID}_TIMEOUT_MS` (e.g. `AGENT_METHOD_GANN_ENABLED=false`).
+
 ## Constraint Rules
 
 - **Gann**: research-only; modifies SignalRank ± only; 300+ samples + random baseline required

@@ -101,16 +101,19 @@ class AgentRegistry:
         return cfg is not None and cfg.enabled
 
     def catalog(self) -> List[dict]:
-        return [
-            {
+        rows = []
+        for aid, cfg in self._manifest.agents.items():
+            row = {
                 "id": aid,
                 "enabled": cfg.enabled,
                 "transport": cfg.transport,
                 "timeout_ms": cfg.timeout_ms,
                 "config": cfg.config,
             }
-            for aid, cfg in self._manifest.agents.items()
-        ]
+            if cfg.mcp_server:
+                row["mcp_server"] = cfg.mcp_server
+            rows.append(row)
+        return rows
 
     def reload(self) -> None:
         from trading_mcp.config_loader import reload_manifest
@@ -119,6 +122,19 @@ class AgentRegistry:
         self._cache.clear()
 
     def _instantiate(self, agent_id: str) -> Optional[Any]:
+        cfg = self._manifest.get(agent_id)
+        if cfg is not None and cfg.transport == "mcp":
+            if not cfg.mcp_server:
+                logger.warning("Agent '%s' has transport=mcp but no mcp_server", agent_id)
+                return None
+            try:
+                from trading_mcp.mcp_agent_proxy import RemoteAgentProxy
+
+                return RemoteAgentProxy(agent_id, cfg)
+            except Exception as e:
+                logger.error("Remote agent '%s' setup failed: %s", agent_id, e)
+                return None
+
         dotpath = AGENT_MAP.get(agent_id)
         if not dotpath:
             logger.warning("No import path for '%s'", agent_id)
