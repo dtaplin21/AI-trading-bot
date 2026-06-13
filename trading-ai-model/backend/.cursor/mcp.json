@@ -1,5 +1,9 @@
 {
   "mcpServers": {
+    "gitnexus": {
+      "command": "npx",
+      "args": ["-y", "gitnexus@latest", "mcp"]
+    },
     "trading-agents": {
       "command": "/Users/dtaplin21/AI-trading-bot/trading-ai-model/backend/.venv/bin/python",
       "args": ["-m", "trading_mcp.trading_server"],

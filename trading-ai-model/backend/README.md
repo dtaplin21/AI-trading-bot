@@ -109,6 +109,8 @@ Live forex orders require: paper off, `OANDA_LIVE_ENABLED`, API key, and `oanda`
 
 ### MCP server (Cursor / agent tooling)
 
+Full setup (GitNexus + trading-agents split): see [`docs/cursor-mcp-setup.md`](../../docs/cursor-mcp-setup.md) at repo root.
+
 The `trading-agents` MCP server exposes registry admin, level intelligence, and risk tools. Configure it in **Cursor → Settings → MCP** (workspace file: `.cursor/mcp.json`):
 
 ```json
