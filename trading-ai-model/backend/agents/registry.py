@@ -46,6 +46,16 @@ AGENT_MAP: Dict[str, str] = {
 
 METHOD_AGENT_IDS = [k for k in AGENT_MAP if k.startswith("method_")]
 
+CONFIRM_METHOD_IDS: tuple[str, ...] = (
+    "method_candlestick",
+    "method_momentum",
+    "method_markov",
+    "method_monte_carlo",
+    "method_harmonic",
+    "method_elliott",
+    "method_fractal",
+)
+
 
 def _import_class(dotpath: str):
     module_path, name = dotpath.rsplit(".", 1)
@@ -75,6 +85,9 @@ class AgentRegistry:
 
     def get_method_agents(self) -> List[Any]:
         return [a for aid in METHOD_AGENT_IDS if (a := self.get(aid)) is not None]
+
+    def get_confirm_method_agents(self) -> List[Any]:
+        return [a for aid in CONFIRM_METHOD_IDS if (a := self.get(aid)) is not None]
 
     def get_enabled(self, prefix: str = "") -> Dict[str, Any]:
         return {

@@ -14,6 +14,7 @@ from agents.news.calendar.classifier import (
 from agents.news.calendar.schemas import CalendarEventDraft
 from agents.news.calendar.calendar_store import CalendarScheduleStore
 from agents.news.news_schemas import EventType, ImpactLevel
+from data.storage.timescale_store import TimescaleStore
 
 
 def test_classify_jobless_claims():
@@ -57,7 +58,7 @@ def test_calendar_store_json_triggers_and_cleanup(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cs, "CALENDAR_ARCHIVE", archive)
 
-    store = CalendarScheduleStore(store=type("S", (), {"available": False})())
+    store = CalendarScheduleStore(store=TimescaleStore(database_url=""))
     future = datetime.now(timezone.utc) + timedelta(hours=2)
     draft = CalendarEventDraft(
         provider_id="static_us_macro",

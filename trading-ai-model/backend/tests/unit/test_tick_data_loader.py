@@ -41,6 +41,8 @@ def test_parse_forex_quote():
     )
     assert tick is not None
     assert tick.symbol == "EURUSD"
+    assert tick.bid is not None
+    assert tick.ask is not None
     assert abs(tick.price - 1.0801) < 1e-6
     assert abs(tick.bid - 1.0800) < 1e-6
     assert abs(tick.ask - 1.0802) < 1e-6

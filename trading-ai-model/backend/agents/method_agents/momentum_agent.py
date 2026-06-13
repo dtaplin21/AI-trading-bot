@@ -12,7 +12,7 @@ class MomentumAgent(BaseMethodAgent):
 
     def analyze(self, symbol, ohlcv, swings, historical_sample_size, shared_features=None):
         shared = shared_features or {}
-        close = ohlcv["close"].values
+        close = np.array(ohlcv["close"], dtype=float)
         returns = np.diff(close) / (close[:-1] + 1e-9)
         momentum = float(np.mean(returns[-5:])) if len(returns) >= 5 else 0.0
         accel = float(np.mean(np.diff(returns[-6:]))) if len(returns) >= 6 else 0.0

@@ -31,8 +31,6 @@ def pipeline(tmp_path, monkeypatch):
     monkeypatch.setenv("MODEL_AUTO_PROMOTE", "false")
 
     store = WorldStateStore()
-    for i in range(80):
-        store._training_rows_cache = None
     rows = [_training_row(i, label=i % 2) for i in range(80)]
     monkeypatch.setattr(
         WorldStateStore,

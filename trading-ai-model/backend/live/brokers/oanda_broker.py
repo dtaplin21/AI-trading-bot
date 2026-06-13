@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Optional
+from typing import Any, Optional, cast
 
 from live.brokers.base_broker import AccountState, BaseBroker, BrokerOrder, BrokerPosition
 
@@ -57,6 +57,9 @@ class OANDABroker(BaseBroker):
             return oandapyV20.API(access_token=self._api_key, environment=self._env)
         except ImportError as exc:
             raise ImportError("Run: pip install oandapyV20") from exc
+
+    def _request(self, req: Any) -> dict[str, Any]:
+        return cast(dict[str, Any], self._client.request(req))
 
     async def place_order(
         self,
@@ -98,7 +101,7 @@ class OANDABroker(BaseBroker):
             import oandapyV20.endpoints.orders as orders_ep
 
             req = orders_ep.OrderCreate(self._account_id, data=body)
-            return self._client.request(req)
+            return self._request(req)
 
         try:
             resp = await asyncio.to_thread(_post)
@@ -142,7 +145,7 @@ class OANDABroker(BaseBroker):
             import oandapyV20.endpoints.orders as orders_ep
 
             req = orders_ep.OrderCancel(self._account_id, orderID=broker_order_id)
-            self._client.request(req)
+            self._request(req)
 
         try:
             await asyncio.to_thread(_cancel)
@@ -166,7 +169,7 @@ class OANDABroker(BaseBroker):
                 self._account_id,
                 params={"instrument": instrument, "state": "OPEN"},
             )
-            resp = self._client.request(req)
+            resp = self._request(req)
             trades = resp.get("trades", [])
             if not trades:
                 raise ValueError("no_open_trade")
@@ -177,7 +180,7 @@ class OANDABroker(BaseBroker):
                 data["units"] = str(int(quantity))
 
             close_req = trades_ep.TradeClose(self._account_id, tradeID=trade_id, data=data)
-            return self._client.request(close_req)
+            return self._request(close_req)
 
         try:
             close_resp = await asyncio.to_thread(_close)
@@ -221,7 +224,7 @@ class OANDABroker(BaseBroker):
             import oandapyV20.endpoints.positions as pos_ep
 
             req = pos_ep.PositionDetails(self._account_id, instrument=instrument)
-            resp = self._client.request(req)
+            resp = self._request(req)
             pos = resp.get("position", {})
             long_units = int(pos.get("long", {}).get("units", 0))
             short_units = int(pos.get("short", {}).get("units", 0))
@@ -252,7 +255,7 @@ class OANDABroker(BaseBroker):
             import oandapyV20.endpoints.accounts as acct_ep
 
             req = acct_ep.AccountSummary(self._account_id)
-            resp = self._client.request(req)
+            resp = self._request(req)
             acct = resp.get("account", {})
             return AccountState(
                 account_id=self._account_id,

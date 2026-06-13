@@ -7,18 +7,10 @@ Changes from paper version:
   • PaperTrader removed entirely
   • LevelEntryGate still the first gate — no level, no trade
 
-Retains the full wired pipeline: confluence, ML, MCTS planner, RiskEngine.
-
-Phase 1.5 additions:
-  • Method agreement gate — methods confirm level direction (LEVEL_MIN_METHOD_AGREEMENT)
-  • Fused P_level + ML for probability gate (LEVEL_ML_BLEND_WEIGHT)
-  • DB entry/TP/SL passed to planner and applied to TradePlan
-  • Position monitor in paper mode (TP/SL tracking without broker close)
-
-Fast lane (LEVEL_FAST_LANE=true, default):
-  • Only actionable watchlist rows (Price Role Entry TP% SL% R:R EV% Win% Hits)
-  • Skips methods, ML, confluence, probability gate
-  • Hard safety only: kill switch, daily loss, drawdown, max positions, notional caps
+Phase 2 — Level-first confirm path:
+  • Actionable level → confirm methods only (7 agents from agents.yaml)
+  • method_agreement + regime veto → DB entry/TP/SL (no MCTS)
+  • LEVEL_FAST_LANE=true skips confirm for top watchlist rows
 """
 from __future__ import annotations
 
@@ -34,7 +26,7 @@ import numpy as np
 import pandas as pd
 
 from agents.chart_reading_agent import ChartReadingAgent
-from agents.method_agents import ALL_METHOD_AGENTS
+from agents.method_agents import ALL_METHOD_AGENTS, get_confirm_method_agents_from_registry
 from agents.news.market_news_agent import MarketNewsAgent
 from agents.news_runtime import bootstrap_news_sync, get_news_agent
 from agents.pipeline_context import PipelineContext
@@ -47,6 +39,10 @@ from pipeline.feature_fusion_news_patch import (
     FeatureFusionAgent,
     NewsAgentProtocol,
     fetch_news_features,
+)
+from pipeline.level_confirmation import (
+    evaluate_level_confirmation,
+    filter_confirm_method_outputs,
 )
 from pipeline.level_entry_gate import LevelEntryGate, _gate_disabled, level_fast_lane_enabled
 from pipeline.level_method_fusion import (
@@ -82,7 +78,7 @@ _UNSET = object()
 
 class TradingPipelineResult:
     def __init__(self) -> None:
-        self.snapshot_id: Optional[str] = None
+        self.snapshot_id: str = str(uuid.uuid4())
         self.level_setup: Optional[LevelSetup] = None
         self.confluence: Optional[ConfluenceReport] = None
         self.fused: Optional[FusedFeatureSet] = None
@@ -93,6 +89,7 @@ class TradingPipelineResult:
         self.executed: bool = False
         self.skipped: bool = False
         self.fast_lane: bool = False
+        self.level_confirm: bool = False
         self.closed_positions: list = []
         self.errors: list[str] = []
 
@@ -207,6 +204,17 @@ class TradingPipelineSupervisor:
                 result.audit = self._build_audit(result)
                 return result
 
+            if level_setup is not None:
+                return await self._run_level_confirm_path(
+                    bar=bar,
+                    level_setup=level_setup,
+                    result=result,
+                    should_execute=should_execute,
+                    portfolio=portfolio,
+                    merged=merged,
+                    historical_sample_size=historical_sample_size,
+                )
+
             ctx = PipelineContext(
                 symbol=self.symbol,
                 timeframe=bar.timeframe or self.timeframe,
@@ -250,20 +258,6 @@ class TradingPipelineSupervisor:
                 result.audit = self._build_audit(result)
                 return result
 
-            if level_setup is not None:
-                agreement = method_agreement_score(result.confluence, level_setup)
-                level_setup.method_agreement = agreement
-                if agreement < min_method_agreement():
-                    result.skipped = True
-                    logger.info(
-                        "%s: method agreement %.2f < min %.2f — skipping",
-                        self.symbol,
-                        agreement,
-                        min_method_agreement(),
-                    )
-                    result.audit = self._build_audit(result)
-                    return result
-
             hist_p, hist_n = self._world.compute_historical_p_success(result.confluence)
             if hist_n <= 0:
                 hist_n = int(fused.sample_size or ctx.historical_sample_size or 0)
@@ -278,11 +272,6 @@ class TradingPipelineSupervisor:
             result.prediction = prediction
 
             p_for_gate = prediction.trade_start_probability
-            if level_setup is not None:
-                level_setup.fused_probability = fused_level_probability(
-                    level_setup, prediction.trade_start_probability
-                )
-                p_for_gate = level_setup.fused_probability
 
             gate = self._gate.check(
                 p_for_gate,
@@ -444,7 +433,9 @@ class TradingPipelineSupervisor:
         self._session.record_outcome(snapshot_id, pnl, r_multiple)
         self._risk_eng.close_position()
 
-    async def _run_methods_concurrent(self, ctx: PipelineContext) -> None:
+    async def _run_methods_concurrent(self, ctx: PipelineContext, agents=None) -> None:
+        method_agents = agents if agents is not None else ALL_METHOD_AGENTS
+
         async def run_one(agent):
             def _run():
                 local = copy.copy(ctx)
@@ -453,10 +444,125 @@ class TradingPipelineSupervisor:
 
             return await asyncio.to_thread(_run)
 
-        batches = await asyncio.gather(*(run_one(agent) for agent in ALL_METHOD_AGENTS))
+        batches = await asyncio.gather(*(run_one(agent) for agent in method_agents))
         ctx.method_outputs = [output for batch in batches for output in batch]
         ctx.metadata["methods_ran"] = len({o.method for o in ctx.method_outputs if not o.skipped})
-        ctx.metadata["all_methods_ran"] = len(ctx.method_outputs) >= len(ALL_METHOD_AGENTS)
+        ctx.metadata["all_methods_ran"] = len(ctx.method_outputs) >= len(method_agents)
+        ctx.metadata["confirm_methods_only"] = agents is not None
+
+    async def _run_level_confirm_path(
+        self,
+        bar: OHLCV,
+        level_setup: LevelSetup,
+        result: TradingPipelineResult,
+        should_execute: bool,
+        portfolio: PortfolioState | None,
+        merged: pd.DataFrame,
+        historical_sample_size: int | None,
+    ) -> TradingPipelineResult:
+        """Level-first path: confirm methods → agreement → DB prices → risk → execute."""
+        result.level_confirm = True
+        tf = bar.timeframe or self.timeframe
+
+        ctx = PipelineContext(
+            symbol=self.symbol,
+            timeframe=tf,
+            ohlcv=merged,
+            timestamp=bar.timestamp if bar.timestamp.tzinfo else bar.timestamp.replace(tzinfo=timezone.utc),
+            portfolio=portfolio or PortfolioState(),
+            historical_sample_size=historical_sample_size or self._sample_size,
+        )
+        ctx.metadata["level_setup"] = level_setup
+
+        if portfolio:
+            self._risk_eng.sync_portfolio(portfolio)
+
+        shared = self._feature_pipeline.build(
+            {
+                "symbol": self.symbol,
+                "timeframe": tf,
+                "timestamp": ctx.timestamp,
+                "ohlcv": merged,
+            }
+        )
+        ctx.metadata["shared_features"] = shared
+
+        await asyncio.to_thread(self._chart.run, ctx)
+        confirm_agents = get_confirm_method_agents_from_registry(symbol=self.symbol)
+        await self._run_methods_concurrent(ctx, agents=confirm_agents)
+        ctx.method_outputs = filter_confirm_method_outputs(
+            ctx.method_outputs, level_setup, float(bar.close)
+        )
+
+        news = fetch_news_features(self._news, self.symbol, 0, ctx.timestamp)
+        ctx.metadata["news_features"] = news.model_dump()
+        confluence_inputs = prepare_confluence_inputs(ctx, news)
+        result.confluence = self._confluence.analyze(**confluence_inputs)
+        ctx.confluence = result.confluence
+
+        confirm = evaluate_level_confirmation(result.confluence, level_setup)
+        level_setup.method_agreement = confirm.agreement
+        if not confirm.passed:
+            result.skipped = True
+            logger.info(
+                "%s: level confirm failed — %s (agreement=%.2f)",
+                self.symbol,
+                confirm.reason,
+                confirm.agreement,
+            )
+            result.audit = self._build_audit(result)
+            return result
+
+        if getattr(news, "trading_blocked", False):
+            result.skipped = True
+            logger.info("%s: level confirm skipped — news block", self.symbol)
+            result.audit = self._build_audit(result)
+            return result
+
+        fused = self._fusion.build_from_context(ctx)
+        result.fused = fused
+        fused.signal_rank = self._compute_signal_rank(fused, result.confluence)
+
+        use_ml = os.getenv("LEVEL_CONFIRM_USE_ML", "false").lower() in ("true", "1", "yes")
+        p_for_gate = level_setup.hold_rate
+        if use_ml:
+            hist_p, hist_n = self._world.compute_historical_p_success(result.confluence)
+            if hist_n <= 0:
+                hist_n = int(fused.sample_size or ctx.historical_sample_size or 0)
+            prediction = await self._run_prediction(
+                fused,
+                hist_p,
+                hist_n,
+                ohlcv=merged,
+                shared_features=shared,
+            )
+            result.prediction = prediction
+            level_setup.fused_probability = fused_level_probability(
+                level_setup, prediction.trade_start_probability
+            )
+            p_for_gate = level_setup.fused_probability
+
+        result.plan = plan_from_level_setup(level_setup, tf, path_label="confirm")
+        result.risk = self._risk_eng.approve_level_fast_lane(result.plan, level_setup)
+
+        if result.risk.approved and should_execute:
+            result.executed = await self._execute(
+                result.plan,
+                result.risk,
+                result.snapshot_id,
+                level_setup=level_setup,
+            )
+
+        logger.info(
+            "%s: level confirm | agreement=%.2f p=%.3f approved=%s executed=%s",
+            self.symbol,
+            confirm.agreement,
+            p_for_gate,
+            result.risk.approved,
+            result.executed,
+        )
+        result.audit = self._build_audit(result)
+        return result
 
     async def _run_prediction(
         self,
@@ -524,7 +630,7 @@ class TradingPipelineSupervisor:
             result.executed = await self._execute(
                 result.plan,
                 result.risk,
-                result.snapshot_id or str(uuid.uuid4()),
+                result.snapshot_id,
                 level_setup=level_setup,
             )
 

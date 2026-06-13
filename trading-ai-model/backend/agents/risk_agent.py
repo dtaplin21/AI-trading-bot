@@ -87,6 +87,8 @@ class RiskAgent(BaseAgent):
 
     def _to_pipeline_plan(self, ctx: PipelineContext) -> TradePlan:
         tp = ctx.trade_plan
+        if tp is None:
+            raise ValueError("trade_plan required")
         action_map = {
             AgentTradeAction.ENTER_LONG: TradeAction.ENTER_LONG,
             AgentTradeAction.ENTER_SHORT: TradeAction.ENTER_SHORT,

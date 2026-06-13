@@ -6,7 +6,7 @@ import json
 import logging
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any, Generator, Optional
+from typing import TYPE_CHECKING, Any, Generator, Optional, cast
 
 import pandas as pd
 
@@ -25,6 +25,9 @@ from data.storage.news_repository import (
     row_to_risk_window,
 )
 
+if TYPE_CHECKING:
+    from agents.news.calendar.schemas import CalendarPollTrigger
+
 logger = logging.getLogger(__name__)
 
 OHLCV_DDL = """
@@ -40,6 +43,13 @@ CREATE TABLE IF NOT EXISTS ohlcv_candles (
     PRIMARY KEY (time, symbol, timeframe)
 );
 """
+
+OHLCV_COLUMNS = ("open", "high", "low", "close", "volume")
+
+
+def _empty_ohlcv_df() -> pd.DataFrame:
+    return pd.DataFrame({col: pd.Series(dtype=float) for col in OHLCV_COLUMNS})
+
 
 OBSERVATIONS_DDL = """
 CREATE TABLE IF NOT EXISTS pipeline_observations (
@@ -248,9 +258,10 @@ class TimescaleStore:
         if not self._available or df.empty:
             return 0
 
+        has_volume = "volume" in df.columns
         rows = []
         for ts, row in df.iterrows():
-            t = pd.Timestamp(ts).to_pydatetime()
+            t = cast(pd.Timestamp, ts).to_pydatetime()
             if t.tzinfo is None:
                 t = t.replace(tzinfo=timezone.utc)
             rows.append(
@@ -262,7 +273,7 @@ class TimescaleStore:
                     float(row["high"]),
                     float(row["low"]),
                     float(row["close"]),
-                    float(row.get("volume", 0)),
+                    float(row["volume"]) if has_volume else 0.0,
                 )
             )
 
@@ -291,7 +302,7 @@ class TimescaleStore:
         end: Optional[str] = None,
     ) -> pd.DataFrame:
         if not self._available:
-            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+            return _empty_ohlcv_df()
 
         clauses = ["symbol = %s", "timeframe = %s"]
         params: list[Any] = [symbol.upper(), timeframe]
@@ -313,9 +324,9 @@ class TimescaleStore:
         with self._connect() as conn:
             df = pd.read_sql(sql, conn, params=params)
         if df.empty:
-            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+            return _empty_ohlcv_df()
         df = df.sort_values("time").set_index("time")
-        return df[["open", "high", "low", "close", "volume"]]
+        return df.loc[:, list(OHLCV_COLUMNS)]
 
     def load_ohlcv_range(
         self,
@@ -327,7 +338,7 @@ class TimescaleStore:
     ) -> pd.DataFrame:
         """Load OHLCV in [start, end] ascending — for chart watcher replay."""
         if not self._available:
-            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+            return _empty_ohlcv_df()
 
         start_t = start if start.tzinfo else start.replace(tzinfo=timezone.utc)
         end_t = end if end.tzinfo else end.replace(tzinfo=timezone.utc)
@@ -344,8 +355,8 @@ class TimescaleStore:
         with self._connect() as conn:
             df = pd.read_sql(sql, conn, params=params)
         if df.empty:
-            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
-        return df.set_index("time")[["open", "high", "low", "close", "volume"]]
+            return _empty_ohlcv_df()
+        return df.set_index("time").loc[:, list(OHLCV_COLUMNS)]
 
     def latest_bar_time(self, symbol: str, timeframe: str = "5m") -> Optional[datetime]:
         if not self._available:
@@ -809,7 +820,7 @@ class TimescaleStore:
         return row[0] if row and row[0] else None
 
     @staticmethod
-    def _calendar_trigger_row(row) -> "CalendarPollTrigger":
+    def _calendar_trigger_row(row) -> CalendarPollTrigger:
         from agents.news.calendar.schemas import CalendarPollTrigger
 
         return CalendarPollTrigger(

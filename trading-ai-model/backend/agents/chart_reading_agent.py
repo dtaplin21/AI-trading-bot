@@ -13,9 +13,9 @@ class ChartReadingAgent(BaseAgent):
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         ohlcv = ctx.ohlcv
-        highs = ohlcv["high"].values
-        lows = ohlcv["low"].values
-        closes = ohlcv["close"].values
+        highs = np.asarray(ohlcv["high"], dtype=float)
+        lows = np.asarray(ohlcv["low"], dtype=float)
+        closes = np.asarray(ohlcv["close"], dtype=float)
 
         swing_highs, swing_lows, swings = self._detect_swings(highs, lows)
         ctx.swings = swings

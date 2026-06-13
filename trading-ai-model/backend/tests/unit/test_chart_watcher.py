@@ -111,7 +111,9 @@ async def test_open_bar_not_emitted_until_superseded():
 
     # Same 5m window — still open
     await asm.on_tick(101.0, timestamp=base + timedelta(minutes=2))
-    assert asm.current_bar("5m").close == 101.0
+    peek = asm.current_bar("5m")
+    assert peek is not None
+    assert peek.close == 101.0
 
     flushed = await asm.flush()
     flushed_5m = [b for b in flushed if b.timeframe == "5m"]
@@ -127,8 +129,11 @@ async def test_multi_symbol_assembler_isolated():
         completed.append(bar)
 
     multi = MultiSymbolAssembler(["MES", "NQ"], ["1m"], on_complete)
-    await multi.get("MES").on_candle(_bar("MES", 0))
-    await multi.get("NQ").on_candle(_bar("NQ", 0))
+    mes_asm = multi.get("MES")
+    nq_asm = multi.get("NQ")
+    assert mes_asm is not None and nq_asm is not None
+    await mes_asm.on_candle(_bar("MES", 0))
+    await nq_asm.on_candle(_bar("NQ", 0))
 
     symbols = {b.symbol for b in completed}
     assert symbols == {"MES", "NQ"}
@@ -206,8 +211,10 @@ async def test_symbol_bar_source_db_fallback(tmp_path, monkeypatch):
     monkeypatch.setenv("WATCHER_DATA_PATH", str(tmp_path))
 
     import pandas as pd
+    from typing import cast
 
     from chart_watcher import chart_watch_runner as cwr
+    from data.storage.timescale_store import TimescaleStore
 
     cwr.DATA_PATH = tmp_path
 
@@ -230,7 +237,7 @@ async def test_symbol_bar_source_db_fallback(tmp_path, monkeypatch):
             )
 
     runner = cwr.ChartWatchRunner()
-    runner._timescale = FakeStore()
+    runner._timescale = cast(TimescaleStore, FakeStore())
     start = datetime(2025, 1, 6, 14, 30, tzinfo=timezone.utc)
     end = datetime(2025, 1, 6, 15, 0, tzinfo=timezone.utc)
     bars = [b async for b in runner._symbol_bar_source("MES", start=start, end=end)]

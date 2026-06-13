@@ -19,7 +19,7 @@ class StrategyMathAgent(BaseMethodAgent):
         self.sharpe = SharpeCalculator()
 
     def analyze(self, symbol, ohlcv, swings, historical_sample_size, shared_features=None):
-        returns = ohlcv["close"].pct_change().dropna().values
+        returns = np.asarray(ohlcv["close"].pct_change().dropna(), dtype=float)
         win_rate = float(np.mean(returns > 0)) if len(returns) else 0.5
         avg_win = float(returns[returns > 0].mean()) if np.any(returns > 0) else 0.01
         avg_loss = float(abs(returns[returns < 0].mean())) if np.any(returns < 0) else 0.01

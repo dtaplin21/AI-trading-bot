@@ -189,7 +189,8 @@ class CorrelationChecker:
             for j, b in enumerate(syms):
                 if i != j:
                     corr[i, j] = KNOWN_CORRELATED.get(frozenset({a, b}), 0.0)
-        return pd.DataFrame(corr, index=syms, columns=syms)
+        labels = pd.Index(syms)
+        return pd.DataFrame(corr, index=labels, columns=labels)
 
 
 _checker: CorrelationChecker | None = None

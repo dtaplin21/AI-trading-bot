@@ -15,7 +15,7 @@ class MonteCarloMethodAgent(BaseMethodAgent):
         self.sim = MonteCarloSimulator()
 
     def analyze(self, symbol, ohlcv, swings, historical_sample_size, shared_features=None):
-        returns = ohlcv["close"].pct_change().dropna().values
+        returns = ohlcv["close"].pct_change().dropna().to_numpy(dtype=float)
         if len(returns) < 10:
             return MethodOutput(method=self.method_name, confidence=0.0, features={"paths_simulated": 0})
         paths = self.sim.run(returns, n_sims=200, horizon=min(20, len(returns)))

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from config.settings import Settings
+from config.settings import Settings, get_settings
 
 
 @dataclass(frozen=True)
@@ -182,33 +182,33 @@ def resolve_broker_status(settings: Settings, broker: BrokerPlatform) -> str:
 
 
 def build_broker_platforms(settings: Optional[Settings] = None) -> list[dict]:
-    settings = settings or __import__("config.settings", fromlist=["get_settings"]).get_settings()
+    resolved: Settings = settings if settings is not None else get_settings()
     rows: list[dict] = []
 
     for broker in BROKER_PLATFORMS:
-        status = resolve_broker_status(settings, broker)
+        status = resolve_broker_status(resolved, broker)
         detail = broker.detail_connected if status == "connected" else broker.detail_disconnected
         if status == "configured":
             detail = f"Credentials saved — add '{broker.id}' to ENABLED_BROKERS to activate"
 
         account_hint = ""
-        if broker.id == "ibkr" and settings.ibkr_account_id:
-            account_hint = f" · Acct …{settings.ibkr_account_id[-4:]}" if len(settings.ibkr_account_id) >= 4 else ""
-        elif broker.id == "coinbase" and settings.coinbase_api_key:
-            mode = "Live" if settings.coinbase_live_enabled and not settings.paper_trading_enabled else "Paper / configured"
+        if broker.id == "ibkr" and resolved.ibkr_account_id:
+            account_hint = f" · Acct …{resolved.ibkr_account_id[-4:]}" if len(resolved.ibkr_account_id) >= 4 else ""
+        elif broker.id == "coinbase" and resolved.coinbase_api_key:
+            mode = "Live" if resolved.coinbase_live_enabled and not resolved.paper_trading_enabled else "Paper / configured"
             account_hint = f" · {mode}"
-        elif broker.id == "oanda" and settings.oanda_api_key:
-            env_label = "Practice" if settings.oanda_practice else "Live"
+        elif broker.id == "oanda" and resolved.oanda_api_key:
+            env_label = "Practice" if resolved.oanda_practice else "Live"
             mode = (
                 f"{env_label} trading"
-                if settings.oanda_live_enabled and not settings.paper_trading_enabled
+                if resolved.oanda_live_enabled and not resolved.paper_trading_enabled
                 else "Configured"
             )
-            acct = settings.oanda_account_id
+            acct = resolved.oanda_account_id
             acct_hint = f" · …{acct[-4:]}" if acct and len(acct) >= 4 else ""
             account_hint = f" · {mode}{acct_hint}"
-        elif broker.id == "alpaca" and settings.alpaca_api_key:
-            account_hint = " · " + ("Paper" if settings.alpaca_paper else "Live")
+        elif broker.id == "alpaca" and resolved.alpaca_api_key:
+            account_hint = " · " + ("Paper" if resolved.alpaca_paper else "Live")
 
         rows.append(
             {
@@ -219,7 +219,7 @@ def build_broker_platforms(settings: Optional[Settings] = None) -> list[dict]:
                 "website": broker.website,
                 "status": status,
                 "detail": detail + account_hint,
-                "enabled": _is_enabled(settings, broker.id) or (broker.id == "paper" and settings.paper_trading_enabled),
+                "enabled": _is_enabled(resolved, broker.id) or (broker.id == "paper" and resolved.paper_trading_enabled),
             }
         )
 
@@ -228,10 +228,10 @@ def build_broker_platforms(settings: Optional[Settings] = None) -> list[dict]:
 
 def primary_execution_broker(settings: Optional[Settings] = None) -> str:
     """Broker id used for new orders (first enabled non-paper, else paper)."""
-    settings = settings or __import__("config.settings", fromlist=["get_settings"]).get_settings()
+    resolved: Settings = settings if settings is not None else get_settings()
     for broker in BROKER_PLATFORMS:
         if broker.id == "paper":
             continue
-        if resolve_broker_status(settings, broker) == "connected":
+        if resolve_broker_status(resolved, broker) == "connected":
             return broker.id
-    return "paper" if settings.paper_trading_enabled else "none"
+    return "paper" if resolved.paper_trading_enabled else "none"

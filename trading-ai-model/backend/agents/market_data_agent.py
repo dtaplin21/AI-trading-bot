@@ -1,6 +1,7 @@
 """Market Data Agent — ingests, stores in TimescaleDB; no trade decisions."""
 
 from datetime import datetime, timezone, timedelta
+from typing import cast
 
 import pandas as pd
 
@@ -46,7 +47,7 @@ class MarketDataAgent(BaseAgent):
             return True
         idx = ctx.ohlcv.index
         if isinstance(idx, pd.DatetimeIndex) and len(idx):
-            last = idx[-1].to_pydatetime()
+            last = cast(pd.Timestamp, idx[-1]).to_pydatetime()
             if last.tzinfo is None:
                 last = last.replace(tzinfo=timezone.utc)
         elif self.store.available:

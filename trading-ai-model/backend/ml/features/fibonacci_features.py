@@ -30,8 +30,7 @@ def extract(df: pd.DataFrame, layer_output: dict) -> dict:
         name: abs(current - price) / (current + 1e-10) * 100
         for name, price in fib_prices.items()
     }
-    nearest_name = min(distances, key=distances.get)
-    nearest_dist = distances[nearest_name]
+    nearest_name, nearest_dist = min(distances.items(), key=lambda item: item[1])
 
     features["fib_nearest_level"] = round(float(fib_prices[nearest_name]), 6)
     features["fib_nearest_dist_pct"] = round(float(nearest_dist), 4)

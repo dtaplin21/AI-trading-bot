@@ -22,7 +22,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -97,6 +97,8 @@ def load_all_bars(symbol: str) -> pd.DataFrame:
         )
         .dropna()
     )
+    if not isinstance(df_5m, pd.DataFrame):
+        raise TypeError(f"{symbol}: 5m resample did not produce a DataFrame")
     logger.info("%s: %d 1m bars → %d 5m bars", symbol, len(df), len(df_5m))
     return df_5m
 
@@ -106,7 +108,7 @@ def _compute_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     gain = delta.clip(lower=0).rolling(period).mean()
     loss = (-delta.clip(upper=0)).rolling(period).mean()
     rs = gain / (loss + 1e-10)
-    return 100 - (100 / (1 + rs))
+    return cast(pd.Series, 100.0 - (100.0 / (1.0 + rs)))
 
 
 def _compute_macd_hist(series: pd.Series) -> pd.Series:
@@ -162,17 +164,18 @@ def find_reversal_touches(df: pd.DataFrame, asset_class: str) -> list[dict[str, 
     fw = cfg.forward_window
     lb = cfg.prior_trend_bars
 
-    close = df["close"].values
-    high = df["high"].values
-    low = df["low"].values
-    volume = df["volume"].values
+    close = np.array(df["close"], dtype=float)
+    high = np.array(df["high"], dtype=float)
+    low = np.array(df["low"], dtype=float)
+    volume = np.array(df["volume"], dtype=float)
+    close_s = df.loc[:, "close"]
     n = len(df)
 
-    vol_ma = pd.Series(volume).rolling(20).mean().values
-    rsi_s = _compute_rsi(df["close"])
-    macd_h = _compute_macd_hist(df["close"])
+    vol_ma = np.asarray(pd.Series(volume, dtype=float).rolling(20).mean(), dtype=float)
+    rsi_s = _compute_rsi(close_s)
+    macd_h = _compute_macd_hist(close_s)
     atr_pct = _compute_atr_pct(df)
-    bb_pos = _compute_bb_pos(df["close"])
+    bb_pos = _compute_bb_pos(close_s)
 
     touches: list[dict[str, Any]] = []
 
@@ -201,8 +204,8 @@ def find_reversal_touches(df: pd.DataFrame, asset_class: str) -> list[dict[str, 
         vm = vol_ma[i] if not np.isnan(vol_ma[i]) else volume[i]
         vol_ratio = volume[i] / (vm + 1e-10)
 
-        ts = df.index[i]
-        hour = int(pd.Timestamp(ts).hour)
+        bar_ts = cast(pd.Timestamp, df.index[i])
+        hour = int(bar_ts.hour)
         sess = (
             "OVERLAP"
             if 13 <= hour < 16
@@ -216,7 +219,7 @@ def find_reversal_touches(df: pd.DataFrame, asset_class: str) -> list[dict[str, 
         move = _outcome_move(approach, outcome, up_move, down_move)
         touches.append(
             {
-                "touched_at": pd.Timestamp(ts).isoformat(),
+                "touched_at": bar_ts.isoformat(),
                 "price_at_touch": round(current, 6),
                 "approach": approach,
                 "outcome": outcome,
@@ -547,8 +550,12 @@ def main() -> None:
             cluster_and_upsert(symbol, asset_class, touches, cluster_pct)
 
             system = LevelIntelligenceSystem(symbol, asset_class)
-            system.print_top_levels(10)
-            system.print_watchlist()
+            top = system.get_top_levels(10)
+            if not top.empty:
+                logger.info("%s top levels:\n%s", symbol, top.to_string(index=False))
+            watchlist = system.get_watchlist()
+            if not watchlist.empty:
+                logger.info("%s watchlist:\n%s", symbol, watchlist.to_string(index=False))
 
         except Exception as exc:
             logger.error("%s: failed: %s", symbol, exc, exc_info=True)

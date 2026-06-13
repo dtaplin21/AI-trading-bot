@@ -2,10 +2,19 @@
 
 import json
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
 
 from ml.promotion.promotion_policy import PromotionPolicy
+
+
+class _PassingMetrics(TypedDict):
+    n_samples: int
+    holdout_brier: float
+    production_brier: float
+    holdout_auc: float
+    positive_rate: float
 
 
 @pytest.fixture
@@ -16,8 +25,8 @@ def policy(tmp_path, monkeypatch):
     return PromotionPolicy()
 
 
-def _passing_metrics():
-    return dict(
+def _passing_metrics() -> _PassingMetrics:
+    return _PassingMetrics(
         n_samples=250,
         holdout_brier=0.20,
         production_brier=0.23,

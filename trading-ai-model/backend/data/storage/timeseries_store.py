@@ -46,7 +46,12 @@ def _normalize_time(value: Any) -> datetime:
     if isinstance(value, datetime):
         dt = value
     else:
-        dt = pd.Timestamp(value).to_pydatetime()
+        ts = pd.Timestamp(value)
+        if ts is pd.NaT:
+            raise ValueError(f"Invalid timestamp: {value!r}")
+        dt = ts.to_pydatetime()
+        if not isinstance(dt, datetime):
+            raise ValueError(f"Invalid timestamp: {value!r}")
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt

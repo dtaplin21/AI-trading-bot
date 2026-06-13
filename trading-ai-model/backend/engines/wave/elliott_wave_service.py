@@ -56,7 +56,7 @@ class ElliottWaveService:
 
     def analyze(self, ohlcv: pd.DataFrame) -> ElliottWaveDistribution:
         """Return probability distribution over wave states."""
-        close = ohlcv["close"].values
+        close = np.array(ohlcv["close"], dtype=float)
         returns = np.diff(close) / (close[:-1] + 1e-9)
         momentum = float(np.mean(returns[-5:])) if len(returns) >= 5 else 0.0
         volatility = float(np.std(returns[-20:])) if len(returns) >= 20 else 0.01

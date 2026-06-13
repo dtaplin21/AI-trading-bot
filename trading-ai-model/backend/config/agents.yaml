@@ -1,96 +1,113 @@
 agents:
 
-  # ── Method agents ──────────────────────────────────────────────────────────
-  method_level_369:
-    enabled: true
-    transport: local
-    timeout_ms: 2000
-    config:
-      weight: 0.10
-
-  method_fibonacci:
-    enabled: true
-    transport: local
-    timeout_ms: 2000
-    config:
-      weight: 0.10
-
-  method_ancient_number:
-    enabled: true
-    transport: local
-    timeout_ms: 2000
-    config:
-      weight: 0.05
-
-  method_gann:
-    enabled: true
-    transport: local
-    timeout_ms: 2000
-    config:
-      weight: 0.02
-
-  method_elliott:
-    enabled: true
-    transport: local
-    timeout_ms: 2000
-    config:
-      weight: 0.10
-
-  method_harmonic:
-    enabled: true
-    transport: local
-    timeout_ms: 2000
-    config:
-      weight: 0.15
-
+  # ── Level confirmation methods (assist DB level thesis) ────────────────────
   method_candlestick:
     enabled: true
     transport: local
     timeout_ms: 2000
     config:
-      weight: 0.15
-
-  method_fractal:
-    enabled: true
-    transport: local
-    timeout_ms: 2000
-    config:
-      weight: 0.07
-
-  method_balance_line:
-    enabled: true
-    transport: local
-    timeout_ms: 2000
-    config:
-      weight: 0.05
+      role: confirm
+      weight: 0.20
 
   method_momentum:
     enabled: true
     transport: local
     timeout_ms: 2000
     config:
-      weight: 0.10
+      role: confirm
+      weight: 0.15
 
   method_markov:
     enabled: true
     transport: local
     timeout_ms: 2000
     config:
-      weight: 0.12
+      role: confirm
+      weight: 0.15
 
   method_monte_carlo:
     enabled: true
     transport: local
     timeout_ms: 3000
     config:
-      weight: 0.06
+      role: confirm
+      weight: 0.12
       simulations: 500
 
-  method_strategy_math:
+  method_harmonic:
     enabled: true
     transport: local
     timeout_ms: 2000
     config:
+      role: confirm
+      weight: 0.12
+      proximity_gated: true
+
+  method_elliott:
+    enabled: true
+    transport: local
+    timeout_ms: 2000
+    config:
+      role: confirm
+      weight: 0.13
+      proximity_gated: true
+
+  method_fractal:
+    enabled: true
+    transport: local
+    timeout_ms: 2000
+    config:
+      role: confirm
+      weight: 0.13
+      proximity_gated: true
+
+  # ── Level discovery methods (disabled — DB level intelligence is primary) ─
+  method_level_369:
+    enabled: false
+    transport: local
+    timeout_ms: 2000
+    config:
+      role: discovery
+      weight: 0.10
+
+  method_fibonacci:
+    enabled: false
+    transport: local
+    timeout_ms: 2000
+    config:
+      role: discovery
+      weight: 0.10
+
+  method_ancient_number:
+    enabled: false
+    transport: local
+    timeout_ms: 2000
+    config:
+      role: discovery
+      weight: 0.05
+
+  method_gann:
+    enabled: false
+    transport: local
+    timeout_ms: 2000
+    config:
+      role: discovery
+      weight: 0.02
+
+  method_balance_line:
+    enabled: false
+    transport: local
+    timeout_ms: 2000
+    config:
+      role: discovery
+      weight: 0.05
+
+  method_strategy_math:
+    enabled: false
+    transport: local
+    timeout_ms: 2000
+    config:
+      role: discovery
       weight: 0.08
 
   # ── Pipeline agents ────────────────────────────────────────────────────────
@@ -111,7 +128,7 @@ agents:
     transport: local
     timeout_ms: 2000
     config:
-      confluence_minimum_methods: 3
+      confluence_minimum_methods: 2
       max_conflict_score: 0.45
 
   feature_fusion:
@@ -128,7 +145,7 @@ agents:
       probability_minimum: 0.55
 
   trade_planning:
-    enabled: true
+    enabled: false
     transport: local
     timeout_ms: 5000
     config:

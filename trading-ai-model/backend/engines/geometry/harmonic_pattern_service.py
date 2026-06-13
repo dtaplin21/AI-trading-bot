@@ -79,11 +79,14 @@ class HarmonicPatternService:
     def _compute_atr(self, ohlcv: pd.DataFrame, period: int = 14) -> float:
         high, low, close = ohlcv["high"], ohlcv["low"], ohlcv["close"]
         prev_close = close.shift(1)
-        tr = pd.concat(
-            [high - low, (high - prev_close).abs(), (low - prev_close).abs()],
-            axis=1,
-        ).max(axis=1)
-        return float(tr.rolling(period).mean().iloc[-1])
+        tr = pd.Series(
+            pd.concat(
+                [high - low, (high - prev_close).abs(), (low - prev_close).abs()],
+                axis=1,
+            ).max(axis=1)
+        )
+        mean_atr = tr.rolling(period).mean()
+        return float(np.asarray(mean_atr)[-1])
 
     def _swing_size_valid(self, swing_size: float, atr: float) -> bool:
         return swing_size >= atr * self.atr_multiplier
@@ -146,12 +149,15 @@ class HarmonicPatternService:
                 self._ratio_within_tolerance(bcd, ratios["bcd"]),
             ]
             if all(checks):
-                acc = 1.0 - np.mean(
-                    [
-                        abs(xab - ratios["xab"]) / ratios["xab"],
-                        abs(abc - ratios["abc"]) / ratios["abc"],
-                        abs(bcd - ratios["bcd"]) / ratios["bcd"],
-                    ]
+                acc = float(
+                    1.0
+                    - np.mean(
+                        [
+                            abs(xab - ratios["xab"]) / ratios["xab"],
+                            abs(abc - ratios["abc"]) / ratios["abc"],
+                            abs(bcd - ratios["bcd"]) / ratios["bcd"],
+                        ]
+                    )
                 )
                 if acc > best_accuracy:
                     best_accuracy = acc

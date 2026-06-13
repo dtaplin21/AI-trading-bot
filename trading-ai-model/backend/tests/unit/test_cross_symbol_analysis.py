@@ -112,6 +112,7 @@ def test_save_and_load_roundtrip(tmp_path: Path):
     loaded = CrossSymbolAnalyzer().load(str(path))
     assert loaded._is_fitted
     assert loaded.profile is not None
+    assert analyzer.profile is not None
     assert loaded.profile.n_levels_analyzed == analyzer.profile.n_levels_analyzed
     assert loaded.per_symbol.keys() == analyzer.per_symbol.keys()
 

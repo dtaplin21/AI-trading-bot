@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from agents.news.calendar.calendar_store import CalendarScheduleStore
 from agents.news.calendar.calendar_sync import CalendarSyncService
@@ -46,7 +46,7 @@ class NewsCalendarScheduler:
         self._next_baseline_mono: float | None = None
         self._next_sync_mono: float | None = None
         self._triggers_today = 0
-        self._trigger_day: datetime | None = None
+        self._trigger_day: date | None = None
 
     def start_background(self) -> None:
         if self._task and not self._task.done():

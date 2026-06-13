@@ -316,10 +316,11 @@ class HierarchicalMCTSPlanner:
         return round(raw_value, 4)
 
     def _backpropagate(self, node: MCTSNode, reward: float) -> None:
-        while node is not None:
-            node.visits += 1
-            node.value_sum += reward
-            node = node.parent
+        current: MCTSNode | None = node
+        while current is not None:
+            current.visits += 1
+            current.value_sum += reward
+            current = current.parent
 
     def _extract_best_path(self, root: MCTSNode) -> list[MCTSNode]:
         path = [root]

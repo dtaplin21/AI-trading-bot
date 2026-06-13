@@ -64,7 +64,7 @@ def calendar_schedule_status():
     agent = get_news_agent()
     return {
         "status": agent.get_status().get("calendar_scheduler"),
-        "upcoming": [e.model_dump() for e in agent.get_upcoming_events(hours=168)],
+        "upcoming": [e.model_dump() for e in agent.get_upcoming_events(hours_ahead=168)],
     }
 
 

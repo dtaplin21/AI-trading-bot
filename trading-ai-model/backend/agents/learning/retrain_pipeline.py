@@ -132,7 +132,10 @@ class RetrainPipeline:
                 raise RuntimeError(f"Promotion failed for {model_id}")
             self._inner._reload_prediction_models()
 
-        out = self.registry.get_model(model_id).to_dict()
+        updated = self.registry.get_model(model_id)
+        if updated is None:
+            raise KeyError(f"Model not found: {model_id}")
+        out = updated.to_dict()
         out["promotion_decision"] = decision.to_dict()
         return out
 

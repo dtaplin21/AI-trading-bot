@@ -1,6 +1,7 @@
 """Tests for full RiskEngine."""
 
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
 
@@ -22,18 +23,18 @@ def _plan(action=TradeAction.ENTER_LONG) -> TradePlan:
     )
 
 
-def _fused(**kwargs) -> FusedFeatureSet:
-    defaults = dict(
+def _fused(**kwargs: Any) -> FusedFeatureSet:
+    base = FusedFeatureSet(
         symbol="MES",
         timeframe="5m",
         timestamp=datetime.now(tz=timezone.utc),
+        signal_rank=0,
     )
-    defaults.update(kwargs)
-    return FusedFeatureSet(**defaults)
+    return base.model_copy(update=kwargs) if kwargs else base
 
 
-def _confluence(**kwargs) -> ConfluenceReport:
-    defaults = dict(
+def _confluence(**kwargs: Any) -> ConfluenceReport:
+    base = ConfluenceReport(
         symbol="MES",
         timeframe="5m",
         timestamp=datetime.now(tz=timezone.utc),
@@ -41,8 +42,7 @@ def _confluence(**kwargs) -> ConfluenceReport:
         conflict_score=0.10,
         news_trading_blocked=False,
     )
-    defaults.update(kwargs)
-    return ConfluenceReport(**defaults)
+    return base.model_copy(update=kwargs) if kwargs else base
 
 
 def test_rejects_daily_loss():

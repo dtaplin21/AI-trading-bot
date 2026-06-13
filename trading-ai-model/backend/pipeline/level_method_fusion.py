@@ -51,8 +51,13 @@ def min_method_agreement() -> float:
     return float(os.getenv("LEVEL_MIN_METHOD_AGREEMENT", "0.35"))
 
 
-def plan_from_level_setup(level_setup: LevelSetup, timeframe: str = "5m") -> TradePlan:
-    """Build TradePlan directly from actionable watchlist row — no methods/ML."""
+def plan_from_level_setup(
+    level_setup: LevelSetup,
+    timeframe: str = "5m",
+    *,
+    path_label: str = "fast lane",
+) -> TradePlan:
+    """Build TradePlan directly from actionable watchlist row — no MCTS."""
     action = (
         TradeAction.ENTER_LONG
         if level_setup.entry_side.upper() == "BUY"
@@ -74,7 +79,7 @@ def plan_from_level_setup(level_setup: LevelSetup, timeframe: str = "5m") -> Tra
         plan_confidence=level_setup.hold_rate,
         plan_ev=level_setup.expected_value_pct,
         plan_notes=(
-            f"Level fast lane | role={level_setup.role} EV={level_setup.expected_value_pct:.3f}% "
+            f"Level {path_label} | role={level_setup.role} EV={level_setup.expected_value_pct:.3f}% "
             f"RR={level_setup.optimal_rr:.1f} win={win_pct:.1f}% hits={level_setup.touch_count}"
         ),
     )

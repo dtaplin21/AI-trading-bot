@@ -431,15 +431,15 @@ def main() -> int:
         data_path = _BACKEND / data_path
 
     if args.sync_from_storage or args.sync_from_csv:
-        store: TimescaleStore | None = None
+        sync_store: TimescaleStore | None = None
         if not args.sync_csv_only:
-            store = TimescaleStore()
+            sync_store = TimescaleStore()
         sync_checkpoint_from_storage(
             checkpoint,
             data_path,
             timeframe=args.timeframe,
             symbols=_symbols_for_sync(checkpoint, symbols),
-            store=store,
+            store=sync_store,
             use_csv=True,
             use_db=not args.sync_csv_only,
         )

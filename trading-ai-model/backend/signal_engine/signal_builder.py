@@ -37,7 +37,7 @@ class SignalBuilder:
         gann = self.gann.analyze(ohlcv, historical_sample_size)
 
         if elliott.can_influence_signal_rank:
-            layer_scores.elliott = elliott.to_signal_contribution(elliott)
+            layer_scores.elliott = self.elliott.to_signal_contribution(elliott)
         if harmonic.production_eligible and harmonic.pattern_completion_score > 0:
             layer_scores.harmonic = harmonic.pattern_completion_score
         layer_scores.gann_modifier = self.gann.get_signal_rank_modifier(gann)

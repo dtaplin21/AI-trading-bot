@@ -21,7 +21,9 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Optional, cast
+
+import pandas as pd
 
 from agents.news_runtime import get_polling_status
 from config.broker_platforms import build_broker_platforms, primary_execution_broker
@@ -79,7 +81,7 @@ def _enrich_from_db(charts: list[WatchedChart], db: TimescaleStore) -> list[Watc
         try:
             df = db.load_ohlcv(chart.symbol, chart.timeframe, limit=1)
             if df is not None and not df.empty:
-                last_bar = df.index[-1].to_pydatetime()
+                last_bar = cast(pd.Timestamp, df.index[-1]).to_pydatetime()
                 if last_bar.tzinfo is None:
                     last_bar = last_bar.replace(tzinfo=timezone.utc)
                 chart.last_price = float(df["close"].iloc[-1])

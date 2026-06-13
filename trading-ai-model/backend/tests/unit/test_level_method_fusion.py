@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
+from typing import Any
 
 from pipeline.confluence_report import ConfluenceReport, MethodVote
 from pipeline.level_method_fusion import (
@@ -14,8 +16,8 @@ from pipeline.level_setup import LevelSetup
 from pipeline.schemas import TradeAction, TradePlan
 
 
-def _level(**kwargs) -> LevelSetup:
-    defaults = dict(
+def _level(**kwargs: Any) -> LevelSetup:
+    base = LevelSetup(
         symbol="EURUSD",
         level_price=1.0843,
         entry_price=1.0843,
@@ -28,8 +30,7 @@ def _level(**kwargs) -> LevelSetup:
         optimal_sl_pct=0.12,
         expected_value_pct=0.18,
     )
-    defaults.update(kwargs)
-    return LevelSetup(**defaults)
+    return replace(base, **kwargs) if kwargs else base
 
 
 def _confluence(votes: list[MethodVote]) -> ConfluenceReport:

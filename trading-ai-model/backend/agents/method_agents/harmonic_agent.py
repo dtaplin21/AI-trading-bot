@@ -20,7 +20,10 @@ class HarmonicAgent(BaseMethodAgent):
             prices = ohlcv["close"].tolist()
             step = max(1, len(prices) // 5)
             swing_tuples = [(idx[i * step], prices[i * step]) for i in range(5)]
-        result = self.service.detect(swing_tuples, ohlcv, historical_sample_size)
+        swings_for_detect: list[tuple[float, float]] = [
+            (float(i), float(p)) for i, p in swing_tuples
+        ]
+        result = self.service.detect(swings_for_detect, ohlcv, historical_sample_size)
         return MethodOutput(
             method=self.method_name,
             confidence=result.pattern_completion_score,

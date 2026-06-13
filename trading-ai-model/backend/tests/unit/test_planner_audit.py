@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import cast
 
 import pytest
+
+from data.storage.timescale_store import TimescaleStore
 
 from mcts.beam_search_planner import BeamPath
 from mcts.mcts_planner import MCTSNode
@@ -142,7 +145,7 @@ def test_persist_planner_audit_skips_non_deep_planners(tmp_path, monkeypatch):
         p_success=0.6,
         ev_dollars=5.0,
         signal_rank=70,
-        store=store,
+        store=cast(TimescaleStore, store),
     )
     assert store.rows == []
     assert not path.exists()
@@ -174,7 +177,7 @@ def test_persist_planner_audit_writes_jsonl_and_db(tmp_path, monkeypatch):
         p_success=0.65,
         ev_dollars=10.0,
         signal_rank=72,
-        store=store,
+        store=cast(TimescaleStore, store),
     )
 
     assert len(store.rows) == 1

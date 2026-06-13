@@ -41,6 +41,7 @@ def test_load_ohlcv_csv(tmp_path: Path):
     df = load_ohlcv_csv(path)
     assert len(df) == 2
     assert df.iloc[0]["close"] == 1.5
+    assert isinstance(df.index, pd.DatetimeIndex)
     assert df.index.tz is not None
 
 

@@ -30,7 +30,7 @@ def test_backtest_evaluator_runs_trades():
 
 def test_walk_forward_tester_with_mock_model():
     rng = np.random.default_rng(0)
-    X = pd.DataFrame(rng.normal(size=(300, 4)), columns=list("abcd"))
+    X = pd.DataFrame(rng.normal(size=(300, 4)), columns=pd.Index(list("abcd")))
     y = pd.Series((rng.random(300) > 0.5).astype(int))
 
     class MockModel:

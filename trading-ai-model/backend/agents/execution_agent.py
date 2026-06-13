@@ -56,13 +56,18 @@ class ExecutionAgent(BaseAgent):
         return ctx
 
     def _execute_paper(self, ctx: PipelineContext) -> PipelineContext:
+        trade_plan = ctx.trade_plan
+        risk = ctx.risk
+        if trade_plan is None or risk is None:
+            raise ValueError("trade_plan and risk required for execution")
+
         order = {
             "symbol": ctx.symbol,
-            "action": ctx.trade_plan.action.value,
-            "entry": ctx.trade_plan.entry_price,
-            "stop": ctx.trade_plan.stop_loss,
-            "target": ctx.trade_plan.take_profit,
-            "size": max(1, int(ctx.risk.max_position_size)),
+            "action": trade_plan.action.value,
+            "entry": trade_plan.entry_price,
+            "stop": trade_plan.stop_loss,
+            "target": trade_plan.take_profit,
+            "size": max(1, int(risk.max_position_size)),
             "snapshot_id": ctx.metadata.get("world_state_snapshot_id", ""),
             "timeframe": ctx.timeframe,
             "signal_rank": ctx.fused.signal_rank if ctx.fused else 0,
@@ -79,15 +84,20 @@ class ExecutionAgent(BaseAgent):
     def _execute_coinbase(self, ctx: PipelineContext) -> PipelineContext:
         from live.coinbase_executor import get_coinbase_executor
 
+        trade_plan = ctx.trade_plan
+        risk = ctx.risk
+        if trade_plan is None or risk is None:
+            raise ValueError("trade_plan and risk required for execution")
+
         risk_meta = ctx.metadata.get("risk_decision") or {}
-        quote_usd = float(risk_meta.get("max_notional_usd") or ctx.risk.max_position_size or 0)
+        quote_usd = float(risk_meta.get("max_notional_usd") or risk.max_position_size or 0)
 
         order = {
             "symbol": ctx.symbol,
-            "action": ctx.trade_plan.action.value,
-            "entry": ctx.trade_plan.entry_price,
+            "action": trade_plan.action.value,
+            "entry": trade_plan.entry_price,
             "quote_size_usd": quote_usd,
-            "size": max(1, int(ctx.risk.max_position_size)),
+            "size": max(1, int(risk.max_position_size)),
             "snapshot_id": ctx.metadata.get("world_state_snapshot_id", ""),
             "timeframe": ctx.timeframe,
         }
@@ -103,12 +113,17 @@ class ExecutionAgent(BaseAgent):
     def _execute_oanda(self, ctx: PipelineContext) -> PipelineContext:
         from live.oanda_executor import get_oanda_executor
 
+        trade_plan = ctx.trade_plan
+        risk = ctx.risk
+        if trade_plan is None or risk is None:
+            raise ValueError("trade_plan and risk required for execution")
+
         risk_meta = ctx.metadata.get("risk_decision") or {}
         units = int(risk_meta.get("oanda_units") or 0) or None
 
         order = {
             "symbol": ctx.symbol,
-            "action": ctx.trade_plan.action.value,
+            "action": trade_plan.action.value,
             "units": units,
             "snapshot_id": ctx.metadata.get("world_state_snapshot_id", ""),
             "timeframe": ctx.timeframe,

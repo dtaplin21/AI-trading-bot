@@ -21,4 +21,6 @@ class MarketDataLoader:
             df = self.store.load_ohlcv(symbol, timeframe, limit=limit, start=start or None, end=end or None)
             if not df.empty:
                 return df
-        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        return pd.DataFrame(
+            {col: pd.Series(dtype=float) for col in ("open", "high", "low", "close", "volume")}
+        )

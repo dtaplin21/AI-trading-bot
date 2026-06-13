@@ -17,6 +17,7 @@ class BaseMethodAgent(BaseAgent):
             ctx.method_outputs.append(
                 MethodOutput(
                     method=self.method_name,
+                    confidence=0.0,
                     skipped=True,
                     skip_reason="missing_ohlcv",
                 )
@@ -36,6 +37,7 @@ class BaseMethodAgent(BaseAgent):
             ctx.method_outputs.append(
                 MethodOutput(
                     method=self.method_name,
+                    confidence=0.0,
                     skipped=True,
                     skip_reason=str(exc),
                 )

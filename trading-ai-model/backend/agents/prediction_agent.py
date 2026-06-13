@@ -61,9 +61,9 @@ class PredictionAgent(BaseAgent):
         should_avoid = (
             rank < 50
             or ror > 0.1
-            or f.get("momentum_momentum_score", 0.5) < 0.2
+            or float(f.get("momentum_momentum_score", 0.5)) < 0.2
             or bool(f.get("news_trading_blocked") or f.get("trading_blocked"))
-            or (ctx.confluence and ctx.confluence.conflict_score > 0.45)
+            or (ctx.confluence is not None and ctx.confluence.conflict_score > 0.45)
         )
 
         ctx.prediction = PredictionOutput(

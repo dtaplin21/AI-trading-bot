@@ -16,6 +16,7 @@ from agents.execution_agent import ExecutionAgent
 from agents.feature_fusion_agent import FeatureFusionAgent
 from agents.learning_agent import LearningAgent
 from agents.market_data_agent import MarketDataAgent
+from agents.method_agents import get_confirm_method_agents_from_registry
 from agents.method_analysis_runner import MethodAnalysisRunner
 from agents.pipeline_context import PipelineContext
 from agents.prediction_agent import PredictionAgent
@@ -40,7 +41,9 @@ class TradingSupervisor:
         bootstrap_news_sync()
         self.market_data = MarketDataAgent()
         self.chart_reading = ChartReadingAgent()
-        self.method_runner = MethodAnalysisRunner()
+        self.method_runner = MethodAnalysisRunner(
+            agents=get_confirm_method_agents_from_registry()
+        )
         self.confluence = ConfluenceAgentRunner(news_agent=self.news)
         self.feature_fusion = FeatureFusionAgent(news_agent=self.news)
         self.prediction = PredictionAgent()
@@ -64,7 +67,9 @@ class TradingSupervisor:
             if load_from_db:
                 ohlcv = self.market_data.load_from_db(symbol, timeframe)
             if ohlcv is None or ohlcv.empty:
-                ohlcv = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+                ohlcv = pd.DataFrame(
+                    {col: pd.Series(dtype=float) for col in ("open", "high", "low", "close", "volume")}
+                )
 
         ctx = PipelineContext(
             symbol=symbol,
