@@ -9,6 +9,28 @@ import os
 logger = logging.getLogger(__name__)
 
 
+def _save_manifest(manifest) -> None:
+    """Write current manifest state back to agents.yaml."""
+    import yaml
+
+    config_path = os.getenv(
+        "AGENT_CONFIG_PATH",
+        "/Users/dtaplin21/AI-trading-bot/trading-ai-model/backend/config/agents.yaml",
+    )
+    data = {"agents": {}}
+    for agent_id, cfg in manifest.agents.items():
+        data["agents"][agent_id] = {
+            "enabled": cfg.enabled,
+            "transport": cfg.transport,
+            "timeout_ms": cfg.timeout_ms,
+            "config": cfg.config,
+        }
+        if cfg.mcp_server:
+            data["agents"][agent_id]["mcp_server"] = cfg.mcp_server
+    with open(config_path, "w") as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+
+
 async def main():
     from mcp.server import Server
     from mcp.server.stdio import stdio_server
@@ -32,12 +54,16 @@ async def main():
             ),
             types.Tool(
                 name="set_agent_config",
-                description="Enable or disable an agent by ID.",
+                description="Enable or disable an agent by ID. Persists to agents.yaml by default.",
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "agent_id": {"type": "string"},
                         "enabled": {"type": "boolean"},
+                        "persist": {
+                            "type": "boolean",
+                            "description": "Write to agents.yaml (default true)",
+                        },
                     },
                     "required": ["agent_id"],
                 },
@@ -118,6 +144,7 @@ async def main():
         elif name == "set_agent_config":
             agent_id = arguments.get("agent_id", "")
             enabled = arguments.get("enabled")
+            persist = arguments.get("persist", True)
             try:
                 from agents.registry import get_agent_registry
 
@@ -128,7 +155,19 @@ async def main():
                 if enabled is not None:
                     cfg.enabled = enabled
                 reg._cache.pop(agent_id, None)
-                return [types.TextContent(type="text", text=f"Updated {agent_id}: enabled={cfg.enabled}")]
+
+                if persist:
+                    _save_manifest(reg._manifest)
+                    note = "Saved to agents.yaml."
+                else:
+                    note = "In-memory only (persist=false)."
+
+                return [
+                    types.TextContent(
+                        type="text",
+                        text=f"Updated {agent_id}: enabled={cfg.enabled}. {note}",
+                    )
+                ]
             except Exception as e:
                 return [types.TextContent(type="text", text=f"Error: {e}")]
 

@@ -5,9 +5,17 @@
       "args": ["-m", "trading_mcp.trading_server"],
       "cwd": "/Users/dtaplin21/AI-trading-bot/trading-ai-model/backend",
       "env": {
-        "AGENT_CONFIG_PATH": "config/agents.yaml",
+        "PYTHONPATH": "/Users/dtaplin21/AI-trading-bot/trading-ai-model/backend",
+        "AGENT_CONFIG_PATH": "/Users/dtaplin21/AI-trading-bot/trading-ai-model/backend/config/agents.yaml",
+        "DATABASE_URL": "<paste from trading-ai-model/backend/.env>",
+        "DATABASE_SSL_DISABLE": "true",
         "PAPER_MODE": "true",
-        "RISK_KILL_SWITCH": "true"
+        "RISK_KILL_SWITCH": "false",
+        "RISK_MAX_CONCURRENT": "3",
+        "RISK_MAX_DAILY_LOSS_PCT": "2.0",
+        "RISK_MAX_POSITION_USD": "500",
+        "LEVEL_GATE_TOLERANCE_PCT": "0.3",
+        "LEVEL_GATE_MIN_TOUCHES": "10"
       }
     }
   }
