@@ -20,11 +20,27 @@ def test_dashboard_overview():
     assert "watcher_symbol_summary" in data
     assert "session_summary" in data
     assert "system_status" in data
+    assert "kill_switch" in data
+    ks = data["kill_switch"]
+    assert "enabled" in ks
+    assert "env_default" in ks
+    assert "updated_at" in ks
+    assert data["system_status"]["kill_switch"]["enabled"] == ks["enabled"]
     assert data.get("source") == "live"
     assert any(p["id"] == "paper" for p in data["platforms"])
     assert any(p["id"] == "robinhood" for p in data["platforms"])
     assert any(p["name"] == "Tradovate" for p in data["platforms"])
     assert any(p["id"] == "oanda" for p in data["platforms"])
+
+
+def test_dashboard_kill_switch_object_shape():
+    res = client.get("/dashboard")
+    assert res.status_code == 200
+    ks = res.json()["kill_switch"]
+    assert isinstance(ks, dict)
+    assert isinstance(ks["enabled"], bool)
+    assert isinstance(ks["env_default"], bool)
+    assert "updated_at" in ks
 
 
 def test_broker_platforms_include_retail_and_futures():
@@ -33,3 +49,15 @@ def test_broker_platforms_include_retail_and_futures():
     categories = {p["category"] for p in platforms}
     assert "retail" in categories
     assert "futures" in categories
+
+
+def test_trades_returns_real_payload_not_mock():
+    res = client.get("/trades")
+    assert res.status_code == 200
+    data = res.json()
+    assert "trades" in data
+    assert "source" in data
+    assert data["source"] in ("live", "empty")
+    for trade in data["trades"]:
+        assert trade["id"] != "t1"
+        assert "source" in trade

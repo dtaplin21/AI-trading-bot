@@ -35,6 +35,7 @@ from pipeline.probability_gate import ProbabilityGate
 from pipeline.schemas import FusedFeatureSet, RiskDecision, TradeAction, TradePlan
 from pipeline.level_setup import LevelSetup
 from risk.correlation_checker import get_correlation_checker
+from risk.kill_switch_runtime import is_kill_switch_active
 
 logger = logging.getLogger(__name__)
 
@@ -185,8 +186,6 @@ class RiskEngine:
             "RISK_MAX_CONSECUTIVE_LOSSES", int(TRADING_PHILOSOPHY["consecutive_loss_limit"])
         )
 
-        self._kill_switch_env = "RISK_KILL_SWITCH"
-
         self._daily_limiter = DailyLossLimiter(
             self._max_daily_loss,
             self._account_size,
@@ -237,10 +236,10 @@ class RiskEngine:
         """Run all risk checks. Returns RiskDecision with approved=True only if all pass."""
         rejections: list[str] = []
 
-        kill_active = _env_bool(self._kill_switch_env, False)
+        kill_active = is_kill_switch_active()
         if kill_active:
             rejections.append(
-                "KILL SWITCH ACTIVE — set RISK_KILL_SWITCH=false in .env to resume"
+                "KILL SWITCH ACTIVE — disable via dashboard or set RISK_KILL_SWITCH=false"
             )
 
         news_blocked = getattr(fused, "news_trading_blocked", False) or confluence.news_trading_blocked
@@ -378,10 +377,10 @@ class RiskEngine:
         """
         rejections: list[str] = []
 
-        kill_active = _env_bool(self._kill_switch_env, False)
+        kill_active = is_kill_switch_active()
         if kill_active:
             rejections.append(
-                "KILL SWITCH ACTIVE — set RISK_KILL_SWITCH=false in .env to resume"
+                "KILL SWITCH ACTIVE — disable via dashboard or set RISK_KILL_SWITCH=false"
             )
 
         daily_hit, remaining_pct = self._daily_limiter.is_limit_hit()

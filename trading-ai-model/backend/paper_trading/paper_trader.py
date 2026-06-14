@@ -88,6 +88,21 @@ class PaperTrader:
             return {"status": "not_found", "position_id": position_id}
         return self._finalize_close(pos, exit_price, reason)
 
+    def close_all_at_market(self, reason: str = "kill_switch") -> list[dict]:
+        """Close every open paper position at last known or DB price."""
+        from risk.kill_switch_actions import latest_close_price
+
+        book = get_position_book()
+        results: list[dict] = []
+        for pos in book.list_open_positions():
+            exit_price = pos.current_price or pos.entry_price
+            if exit_price == pos.entry_price:
+                mark = latest_close_price(pos.symbol, pos.timeframe)
+                if mark is not None:
+                    exit_price = mark
+            results.append(self.close_position(pos.id, exit_price, reason))
+        return results
+
     def _finalize_close(self, pos: OpenPosition, exit_price: float, reason: str) -> dict:
         pnl = pos.realized_pnl_dollars(exit_price)
         r_mult = pos.r_multiple(pnl)

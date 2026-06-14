@@ -69,6 +69,7 @@ from data.storage.feature_store import get_feature_store
 from ml.features.feature_pipeline import FeaturePipeline
 from pipeline.world_state_runtime import get_world_state_store
 from risk.risk_engine import PortfolioState, RiskEngine
+from risk.kill_switch_runtime import is_kill_switch_active
 from validation.method_isolation.method_isolation_validator import MethodEdgeRegistry
 
 logger = logging.getLogger(__name__)
@@ -157,7 +158,7 @@ class TradingPipelineSupervisor:
             timeframe,
             "paper" if paper_mode else "LIVE",
             self._news is not None,
-            os.getenv("RISK_KILL_SWITCH", "false"),
+            is_kill_switch_active(),
         )
 
     async def on_new_bar(
@@ -183,6 +184,11 @@ class TradingPipelineSupervisor:
                 result.closed_positions = closed
                 if closed:
                     asyncio.create_task(self._log_closes_to_learning(closed))
+
+            if is_kill_switch_active():
+                result.skipped = True
+                result.audit = self._build_audit(result)
+                return result
 
             level_setup = self._level_gate.check(current_price=bar.close)
             if level_setup is None and not _gate_disabled():

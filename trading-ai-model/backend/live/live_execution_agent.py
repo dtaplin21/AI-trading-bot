@@ -23,6 +23,7 @@ from data.storage.pg_connect import connect_psycopg2, is_database_url_placeholde
 from live.broker_router import get_broker_router
 from live.live_position_monitor import LivePosition, get_position_monitor
 from pipeline.level_setup import LevelSetup
+from risk.kill_switch_runtime import is_kill_switch_active
 
 logger = logging.getLogger("LiveExecutionAgent")
 
@@ -70,7 +71,7 @@ _schema_ready = False
 
 
 def _kill_switch() -> bool:
-    return os.getenv("RISK_KILL_SWITCH", "false").lower() in ("true", "1", "yes")
+    return is_kill_switch_active()
 
 
 def _max_concurrent() -> int:

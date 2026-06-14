@@ -9,7 +9,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import risk.kill_switch_runtime as kill_switch_runtime
 from live.live_position_monitor import LivePosition, LivePositionMonitor, reset_position_monitor
+
+
+@pytest.fixture(autouse=True)
+def kill_switch_off(monkeypatch):
+    monkeypatch.setenv("RISK_KILL_SWITCH", "false")
+    monkeypatch.setattr(kill_switch_runtime, "_read_postgres", lambda: (None, None))
+    kill_switch_runtime.reset_kill_switch_runtime()
+    yield
+    kill_switch_runtime.reset_kill_switch_runtime()
 
 
 def _long_position(**kwargs: Any) -> LivePosition:
@@ -81,6 +91,7 @@ async def test_on_bar_sl_hit_long(monitor):
 @pytest.mark.asyncio
 async def test_on_bar_kill_switch(monkeypatch, monitor):
     monkeypatch.setenv("RISK_KILL_SWITCH", "true")
+    kill_switch_runtime.reset_kill_switch_runtime()
     monitor.register(_long_position())
     closed = await monitor.on_bar("EURUSD", high=1.0810, low=1.0790, close=1.0805)
     assert len(closed) == 1

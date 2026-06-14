@@ -2,13 +2,24 @@
 
 from datetime import datetime, timezone
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
+import risk.kill_switch_runtime as kill_switch_runtime
 from pipeline.confluence_report import ConfluenceReport
 from pipeline.schemas import FusedFeatureSet, TradeAction, TradePlan
 from paper_trading.position_book import reset_position_book
 from risk.risk_engine import PortfolioState, RiskEngine
+
+
+@pytest.fixture(autouse=True)
+def kill_switch_off(monkeypatch):
+    monkeypatch.setenv("RISK_KILL_SWITCH", "false")
+    monkeypatch.setattr(kill_switch_runtime, "_read_postgres", lambda: (None, None))
+    kill_switch_runtime.reset_kill_switch_runtime()
+    yield
+    kill_switch_runtime.reset_kill_switch_runtime()
 
 
 def _plan(action=TradeAction.ENTER_LONG) -> TradePlan:
@@ -62,17 +73,17 @@ def test_approves_valid_signal():
 
 def test_kill_switch_rejects(monkeypatch):
     reset_position_book()
-    monkeypatch.setenv("RISK_KILL_SWITCH", "true")
-    engine = RiskEngine()
-    result = engine.approve(
-        plan=_plan(),
-        fused=_fused(),
-        confluence=_confluence(),
-        p_success=0.70,
-        ev_dollars=10.0,
-        sample_size=500,
-        signal_rank=75,
-    )
+    with patch("risk.risk_engine.is_kill_switch_active", return_value=True):
+        engine = RiskEngine()
+        result = engine.approve(
+            plan=_plan(),
+            fused=_fused(),
+            confluence=_confluence(),
+            p_success=0.70,
+            ev_dollars=10.0,
+            sample_size=500,
+            signal_rank=75,
+        )
     assert result.approved is False
     assert result.kill_switch_active is True
     assert any("KILL SWITCH" in r for r in result.rejection_reasons)

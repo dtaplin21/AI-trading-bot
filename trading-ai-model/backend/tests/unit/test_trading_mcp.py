@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 def _make_registry(agents: dict):
@@ -23,7 +23,11 @@ def _make_registry(agents: dict):
 
 
 def test_get_risk_summary_returns_expected_keys(monkeypatch):
+    import risk.kill_switch_runtime as kill_switch_runtime
+
     monkeypatch.setenv("RISK_KILL_SWITCH", "false")
+    monkeypatch.setattr(kill_switch_runtime, "_read_postgres", lambda: (None, None))
+    kill_switch_runtime.reset_kill_switch_runtime()
     monkeypatch.setenv("PAPER_MODE", "true")
     monkeypatch.setenv("RISK_MAX_CONCURRENT", "3")
 
@@ -43,7 +47,11 @@ def test_get_risk_summary_returns_expected_keys(monkeypatch):
 
 
 def test_get_risk_summary_lists_open_positions(monkeypatch):
+    import risk.kill_switch_runtime as kill_switch_runtime
+
     monkeypatch.setenv("RISK_KILL_SWITCH", "false")
+    monkeypatch.setattr(kill_switch_runtime, "_read_postgres", lambda: (None, None))
+    kill_switch_runtime.reset_kill_switch_runtime()
 
     mock_pos = MagicMock()
     mock_pos.trade_id = "live-MES-abc123"
@@ -72,7 +80,11 @@ def test_get_risk_summary_lists_open_positions(monkeypatch):
 
 
 def test_set_kill_switch_true(monkeypatch):
+    import risk.kill_switch_runtime as kill_switch_runtime
+
     monkeypatch.setenv("RISK_KILL_SWITCH", "false")
+    monkeypatch.setattr(kill_switch_runtime, "_write_postgres", lambda enabled: None)
+    kill_switch_runtime.reset_kill_switch_runtime()
     import asyncio
 
     from trading_mcp.tools.risk import set_kill_switch
@@ -80,11 +92,17 @@ def test_set_kill_switch_true(monkeypatch):
     result = asyncio.run(set_kill_switch(True))
     data = json.loads(result)
     assert data["ok"] is True
-    assert os.getenv("RISK_KILL_SWITCH") == "true"
+    assert data["enabled"] is True
+    assert data["effective"] is True
+    assert kill_switch_runtime.is_kill_switch_active() is True
 
 
 def test_set_kill_switch_false(monkeypatch):
+    import risk.kill_switch_runtime as kill_switch_runtime
+
     monkeypatch.setenv("RISK_KILL_SWITCH", "true")
+    monkeypatch.setattr(kill_switch_runtime, "_write_postgres", lambda enabled: None)
+    kill_switch_runtime.reset_kill_switch_runtime()
     import asyncio
 
     from trading_mcp.tools.risk import set_kill_switch
@@ -92,7 +110,34 @@ def test_set_kill_switch_false(monkeypatch):
     result = asyncio.run(set_kill_switch(False))
     data = json.loads(result)
     assert data["ok"] is True
-    assert os.getenv("RISK_KILL_SWITCH") == "false"
+    assert data["enabled"] is False
+    assert data["effective"] is False
+    assert kill_switch_runtime.is_kill_switch_active() is False
+
+
+def test_set_kill_switch_delegates_to_runtime(monkeypatch):
+    import asyncio
+
+    from trading_mcp.tools.risk import set_kill_switch
+
+    expected = {
+        "enabled": True,
+        "env_default": False,
+        "updated_at": None,
+        "effective": True,
+        "source": "memory",
+    }
+    with patch(
+        "trading_mcp.tools.risk.set_kill_switch_enabled",
+        new=AsyncMock(return_value=expected),
+    ) as runtime_set:
+        result = asyncio.run(set_kill_switch(True))
+
+    runtime_set.assert_awaited_once_with(True)
+    data = json.loads(result)
+    assert data["ok"] is True
+    assert data["enabled"] is True
+    assert data["effective"] is True
 
 
 # ── check_level_gate ──────────────────────────────────────────────────────────

@@ -9,12 +9,18 @@ import json
 import logging
 import os
 
+from risk.kill_switch_runtime import (
+    get_kill_switch_status,
+    is_kill_switch_active,
+    set_kill_switch_enabled,
+)
+
 logger = logging.getLogger(__name__)
 
 
 async def get_risk_summary() -> str:
     """Return current risk state: kill switch, daily loss, open positions, caps."""
-    kill = os.getenv("RISK_KILL_SWITCH", "false")
+    kill_status = get_kill_switch_status()
     paper = os.getenv("PAPER_MODE", "true")
     max_pos = os.getenv("RISK_MAX_CONCURRENT", "3")
     max_loss = os.getenv("RISK_MAX_DAILY_LOSS_PCT", "2.0")
@@ -42,7 +48,8 @@ async def get_risk_summary() -> str:
 
     return json.dumps(
         {
-            "kill_switch": kill,
+            "kill_switch": is_kill_switch_active(),
+            "kill_switch_status": kill_status,
             "paper_mode": paper,
             "max_concurrent": max_pos,
             "max_daily_loss_pct": max_loss,
@@ -51,21 +58,11 @@ async def get_risk_summary() -> str:
             "open_count": len(open_positions),
         },
         indent=2,
+        default=str,
     )
 
 
 async def set_kill_switch(enabled: bool) -> str:
-    """
-    Toggle the kill switch.
-    Sets the env var for this process — worker must be restarted to propagate.
-    For immediate effect, set RISK_KILL_SWITCH in Render env and redeploy.
-    """
-    os.environ["RISK_KILL_SWITCH"] = "true" if enabled else "false"
-    logger.warning("Kill switch set to %s via MCP", enabled)
-    return json.dumps(
-        {
-            "ok": True,
-            "kill_switch": os.getenv("RISK_KILL_SWITCH"),
-            "note": "Set in MCP process only. Restart worker to propagate.",
-        }
-    )
+    """Toggle kill switch — same path as PUT /risk/kill-switch."""
+    status = await set_kill_switch_enabled(enabled)
+    return json.dumps({"ok": True, **status}, indent=2, default=str)

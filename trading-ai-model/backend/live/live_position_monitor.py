@@ -23,6 +23,7 @@ from typing import Dict, List, Optional
 
 from data.storage.pg_connect import connect_psycopg2, is_database_url_placeholder
 from live.broker_router import get_broker_router
+from risk.kill_switch_runtime import is_kill_switch_active
 
 logger = logging.getLogger("LivePositionMonitor")
 
@@ -93,6 +94,19 @@ class LivePositionMonitor:
     def open_positions(self) -> List[LivePosition]:
         return list(self._positions.values())
 
+    async def flatten_all(self, reason: str = "KILL_SWITCH") -> List[CloseResult]:
+        """Close every open live position immediately (kill switch / manual flatten)."""
+        closed: List[CloseResult] = []
+        for pos in list(self.open_positions()):
+            exit_price = self._resolve_market_exit_price(pos)
+            closed.append(await self._close(pos, reason, exit_price))
+        return closed
+
+    def _resolve_market_exit_price(self, pos: LivePosition) -> float:
+        from risk.kill_switch_actions import latest_close_price
+
+        return latest_close_price(pos.symbol) or pos.entry_price
+
     # ── Main bar check ────────────────────────────────────────────────────────
 
     async def on_bar(self, symbol: str, high: float, low: float, close: float) -> List[CloseResult]:
@@ -102,7 +116,7 @@ class LivePositionMonitor:
         Returns list of CloseResults for any positions that were closed.
         """
         closed: List[CloseResult] = []
-        kill_switch = os.getenv("RISK_KILL_SWITCH", "false").lower() == "true"
+        kill_switch = is_kill_switch_active()
 
         for trade_id, pos in list(self._positions.items()):
             if pos.symbol != symbol:

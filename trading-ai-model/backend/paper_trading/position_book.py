@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -219,6 +220,10 @@ class PositionBook:
         with self._lock:
             return sorted({p.symbol for p in self._positions.values()})
 
+    def list_open_positions(self) -> list[OpenPosition]:
+        with self._lock:
+            return list(self._positions.values())
+
 
 _book: PositionBook | None = None
 
@@ -227,7 +232,8 @@ def get_position_book() -> PositionBook:
     global _book
     if _book is None:
         _book = PositionBook()
-        _seed_demo_positions(_book)
+        if os.getenv("SEED_DEMO_POSITIONS", "false").lower() in ("true", "1", "yes"):
+            _seed_demo_positions(_book)
     return _book
 
 

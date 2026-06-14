@@ -57,9 +57,12 @@ def test_size_position_zero_when_no_sl_distance():
 
 @pytest.mark.asyncio
 async def test_execute_level_kill_switch(monkeypatch):
+    import risk.kill_switch_runtime as kill_switch_runtime
+
     reset_live_execution_agent()
     reset_position_monitor()
     monkeypatch.setenv("RISK_KILL_SWITCH", "true")
+    kill_switch_runtime.reset_kill_switch_runtime()
     agent = LiveExecutionAgent()
     ok = await agent.execute_level(_setup())
     assert ok is False

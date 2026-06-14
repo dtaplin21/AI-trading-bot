@@ -33,6 +33,7 @@ from config.execution_config import (
     resolve_execution_mode,
 )
 from risk.risk_runtime import get_risk_engine
+from risk.kill_switch_runtime import get_kill_switch_status
 from config.settings import get_settings
 from config.watchlist import (
     WatchedChart,
@@ -98,11 +99,21 @@ def _enrich_from_db(charts: list[WatchedChart], db: TimescaleStore) -> list[Watc
     return charts
 
 
+def build_kill_switch_payload() -> dict[str, Any]:
+    """Kill switch state for dashboard (matches GET /risk/kill-switch core fields)."""
+    status = get_kill_switch_status()
+    return {
+        "enabled": status["enabled"],
+        "env_default": status["env_default"],
+        "updated_at": status.get("updated_at"),
+    }
+
+
 def build_system_status() -> dict[str, Any]:
     """System health summary for the dashboard status panel."""
     return {
         "paper_mode": os.getenv("PAPER_TRADING_ENABLED", "true"),
-        "kill_switch": os.getenv("RISK_KILL_SWITCH", "false"),
+        "kill_switch": build_kill_switch_payload(),
         "watcher_mode": os.getenv("WATCHER_MODE", "paper"),
         "auto_promote": os.getenv("MODEL_AUTO_PROMOTE", "false"),
         "db_connected": _get_db() is not None,
@@ -207,6 +218,7 @@ def _build_core_dashboard(watched_objs: list[WatchedChart]) -> dict[str, Any]:
         "system_status": build_system_status(),
         "session_summary": build_session_summary(watched_objs),
         "news_polling": get_polling_status(),
+        "kill_switch": build_kill_switch_payload(),
         "source": "live",
     }
 
@@ -271,6 +283,7 @@ def _fallback_dashboard() -> dict[str, Any]:
         "platform_summary": {"connected": 0, "configured": 0, "total": 0},
         "services": [],
         "news_polling": {"enabled": False, "running": False},
+        "kill_switch": build_kill_switch_payload(),
         "source": "fallback",
         "execution_mode": "paper",
         "active_broker": "paper",

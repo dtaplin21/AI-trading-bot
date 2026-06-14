@@ -46,6 +46,7 @@ from pipeline.schemas import OHLCV
 from data.storage.timescale_store import TimescaleStore
 from data.storage.timeseries_store import TimeseriesStore
 from pipeline.trading_supervisor import TradingPipelineSupervisor
+from risk.kill_switch_runtime import is_kill_switch_active
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +174,7 @@ class ChartWatchRunner:
             "ChartWatchRunner: STARTING | mode=%s | %d symbols | kill_switch=%s",
             self._mode.value,
             len(SYMBOLS),
-            os.getenv("RISK_KILL_SWITCH", "false"),
+            is_kill_switch_active(),
         )
 
         try:
@@ -618,6 +619,13 @@ class ChartWatchRunner:
         return df
 
     async def _on_bar_complete(self, bar: OHLCV) -> None:
+        try:
+            from risk.kill_switch_actions import maybe_flatten_on_kill_active
+
+            await maybe_flatten_on_kill_active()
+        except Exception as exc:
+            logger.error("ChartWatchRunner: kill switch flatten failed: %s", exc, exc_info=True)
+
         if LOG_BARS:
             logger.debug(
                 "BAR [%s %s] O=%.2f H=%.2f L=%.2f C=%.2f V=%.0f",
@@ -686,5 +694,5 @@ class ChartWatchRunner:
             "bars_processed": self._bars_processed,
             "started_at": self._started_at.isoformat() if self._started_at else None,
             "supervisors": len(self._supervisors),
-            "kill_switch": os.getenv("RISK_KILL_SWITCH", "false"),
+            "kill_switch": is_kill_switch_active(),
         }
