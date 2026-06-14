@@ -13,6 +13,11 @@ const STATUS_STYLE = {
   live: { bg: "#EAF3DE", text: "#27500A", label: "Live" },
   watching: { bg: "#FAEEDA", text: "#633806", label: "Watching" },
   closed: { bg: "#F1EFE8", text: "#5F5E5A", label: "Session closed" },
+  feeding: { bg: "#EAF3DE", text: "#27500A", label: "Feeding" },
+  stale: { bg: "#FAEEDA", text: "#633806", label: "Stale" },
+  offline: { bg: "#F1EFE8", text: "#5F5E5A", label: "Offline" },
+  session_closed: { bg: "#F1EFE8", text: "#5F5E5A", label: "Session closed" },
+  no_broker: { bg: "#FAECE7", text: "#993C1D", label: "No broker" },
 };
 
 const CATEGORY_LABEL = {
@@ -199,11 +204,16 @@ function OpenPositionRow({ pos }) {
 
 function ChartRow({ chart }) {
   const displayName = chart.display_name || chart.label || chart.symbol;
+  const feedStatus = chart.feed_status || chart.status || "offline";
+  const lastBarIso = chart.watcher_last_bar_at || chart.last_bar_at;
+  const showNoBroker =
+    feedStatus === "feeding" && !chart.execution_ready && chart.pipeline_running;
+
   return (
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "100px 1fr auto auto",
+        gridTemplateColumns: "100px 1fr auto auto auto",
         gap: 12,
         alignItems: "center",
         padding: "10px 0",
@@ -217,27 +227,48 @@ function ChartRow({ chart }) {
       <div>
         <p style={{ margin: 0, fontSize: 12, color: "var(--color-text-secondary)" }}>{displayName}</p>
         <p style={{ margin: "2px 0 0", fontSize: 11, color: "var(--color-text-tertiary)" }}>
-          Last bar {fmtRelative(chart.last_bar_at)}
+          Last bar {fmtRelative(lastBarIso)}
+          {chart.watcher_bars_processed > 0 ? ` · ${chart.watcher_bars_processed} bars` : ""}
           {chart.session_label ? ` · ${chart.session_label}` : ""}
         </p>
       </div>
       <span style={{ fontSize: 13, fontWeight: 500 }}>{fmtPrice(chart.last_price)}</span>
-      <StatusBadge status={chart.status} />
+      <StatusBadge status={feedStatus} />
+      {showNoBroker && <StatusBadge status="no_broker" />}
     </div>
   );
 }
 
-function WatchedChartsPanel({ watchedCharts, grouped }) {
+function WatchedChartsPanel({ watchedCharts, grouped, watcherStatus }) {
   const groups = grouped && Object.keys(grouped).length > 0 ? grouped : null;
+  const ws = watcherStatus || {};
+  const summaryParts = [
+    ws.online ? "Watcher online" : "Watcher offline",
+    ws.mode ? `mode ${ws.mode}` : null,
+    ws.feeding != null ? `${ws.feeding} feeding` : null,
+    ws.stale != null ? `${ws.stale} stale` : null,
+    ws.session_closed != null ? `${ws.session_closed} session closed` : null,
+    ws.execution_ready_count != null ? `${ws.execution_ready_count} exec ready` : null,
+  ].filter(Boolean);
+
+  const renderCharts = (charts) =>
+    charts.map((chart) => (
+      <ChartRow key={`${chart.symbol}-${chart.timeframe}`} chart={chart} />
+    ));
 
   if (!watchedCharts.length && !groups) {
     return <p style={{ margin: 0, fontSize: 13, color: "var(--color-text-tertiary)" }}>No charts configured.</p>;
   }
 
-  if (groups) {
-    return (
-      <>
-        {Object.entries(groups).map(([className, charts]) => (
+  return (
+    <>
+      {summaryParts.length > 0 && (
+        <p style={{ margin: "0 0 12px", fontSize: 12, color: "var(--color-text-secondary)" }}>
+          {summaryParts.join(" · ")}
+        </p>
+      )}
+      {groups ? (
+        Object.entries(groups).map(([className, charts]) => (
           <div key={className} style={{ marginBottom: 12 }}>
             <p
               style={{
@@ -249,18 +280,14 @@ function WatchedChartsPanel({ watchedCharts, grouped }) {
             >
               {className.toUpperCase()} ({charts.length})
             </p>
-            {charts.map((chart) => (
-              <ChartRow key={`${chart.symbol}-${chart.timeframe}`} chart={chart} />
-            ))}
+            {renderCharts(charts)}
           </div>
-        ))}
-      </>
-    );
-  }
-
-  return watchedCharts.map((chart) => (
-    <ChartRow key={`${chart.symbol}-${chart.timeframe}`} chart={chart} />
-  ));
+        ))
+      ) : (
+        renderCharts(watchedCharts)
+      )}
+    </>
+  );
 }
 
 export default function SystemStatusPanel({ dashboard, loading = false, onPollingChange, onKillSwitchChange }) {
@@ -388,6 +415,26 @@ export default function SystemStatusPanel({ dashboard, loading = false, onPollin
           <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
             <strong>{watchedCharts.length}</strong> charts watched
           </span>
+          {data.watcher_status && (
+            <>
+              <span style={{ color: "var(--color-border-tertiary)" }}>|</span>
+              <span
+                style={{
+                  fontSize: 13,
+                  color: data.watcher_status.online ? "#27500A" : "var(--color-text-secondary)",
+                }}
+              >
+                Watcher{" "}
+                <strong>{data.watcher_status.online ? "online" : "offline"}</strong>
+                {data.watcher_status.feeding != null && (
+                  <>
+                    {" "}
+                    · <strong>{data.watcher_status.feeding}</strong> feeding
+                  </>
+                )}
+              </span>
+            </>
+          )}
           {data.source === "fallback" && (
             <>
               <span style={{ color: "var(--color-border-tertiary)" }}>|</span>
@@ -443,6 +490,7 @@ export default function SystemStatusPanel({ dashboard, loading = false, onPollin
             <WatchedChartsPanel
               watchedCharts={watchedCharts}
               grouped={data.watched_charts_grouped}
+              watcherStatus={data.watcher_status}
             />
           </Section>
         </div>

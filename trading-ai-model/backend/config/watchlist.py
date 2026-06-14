@@ -78,13 +78,22 @@ class WatchedChart:
     bar_count: int = 0
     session_open: bool = False
     session_label: str = ""
+    feed_status: str = "unknown"
+    pipeline_running: bool = False
+    execution_ready: bool = False
+    watcher_bars_processed: int = 0
+    watcher_last_bar_at: Optional[str] = None
 
     @property
     def label(self) -> str:
         return self.display_name
 
     def to_dict(self) -> dict:
-        status = "live" if self.last_bar_at else ("watching" if self.session_open else "closed")
+        legacy_status = (
+            self.feed_status
+            if self.feed_status != "unknown"
+            else ("live" if self.last_bar_at else ("watching" if self.session_open else "closed"))
+        )
         return {
             "symbol": self.symbol,
             "timeframe": self.timeframe,
@@ -100,8 +109,13 @@ class WatchedChart:
             "bar_count": self.bar_count,
             "session_open": self.session_open,
             "session_label": self.session_label,
-            "status": status,
-            "pipeline_active": self.session_open,
+            "status": legacy_status,
+            "feed_status": self.feed_status,
+            "pipeline_running": self.pipeline_running,
+            "execution_ready": self.execution_ready,
+            "watcher_bars_processed": self.watcher_bars_processed,
+            "watcher_last_bar_at": self.watcher_last_bar_at,
+            "pipeline_active": self.pipeline_running,
         }
 
 

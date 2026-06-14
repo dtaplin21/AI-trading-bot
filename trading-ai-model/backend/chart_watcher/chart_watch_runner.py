@@ -30,6 +30,7 @@ import csv
 import json
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import AsyncIterator, Optional, Union, cast
@@ -146,6 +147,8 @@ class ChartWatchRunner:
         self._timeseries: TimeseriesStore | None = None
         self._tick_loaders: list = []
         self._tick_aggregator = None
+        self._symbol_last_bar: dict[str, str] = {}
+        self._last_heartbeat_write: float = 0.0
 
         logger.info(
             "ChartWatchRunner: mode=%s | symbols=%s | timeframes=%s",
@@ -176,6 +179,7 @@ class ChartWatchRunner:
             len(SYMBOLS),
             is_kill_switch_active(),
         )
+        self._publish_watcher_status(force=True)
 
         try:
             if self._mode == WatcherMode.LIVE:
@@ -186,6 +190,7 @@ class ChartWatchRunner:
                 await self._run_paper()
         finally:
             self._running = False
+            self._publish_watcher_status(running=False, force=True)
             await self._stop_news()
             await self._assembler.flush_all()
             logger.info(
@@ -684,6 +689,40 @@ class ChartWatchRunner:
                 e,
                 exc_info=True,
             )
+
+        ts = bar.timestamp
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        self._symbol_last_bar[bar.symbol.upper()] = ts.isoformat()
+        self._publish_watcher_status()
+
+    def _publish_watcher_status(
+        self,
+        *,
+        running: bool | None = None,
+        force: bool = False,
+    ) -> None:
+        now = time.monotonic()
+        min_sec = float(os.getenv("WATCHER_HEARTBEAT_WRITE_SEC", "15"))
+        if not force and (now - self._last_heartbeat_write) < min_sec:
+            return
+        self._last_heartbeat_write = now
+
+        from chart_watcher.watcher_runtime import publish_watcher_status
+
+        is_running = self._running if running is None else running
+        publish_watcher_status(
+            {
+                "running": is_running,
+                "mode": self._mode.value,
+                "started_at": self._started_at.isoformat() if self._started_at else None,
+                "symbols": list(SYMBOLS),
+                "timeframes": list(TIMEFRAMES),
+                "bars_processed": dict(self._bars_processed),
+                "symbol_last_bar": dict(self._symbol_last_bar),
+                "kill_switch": is_kill_switch_active(),
+            }
+        )
 
     def status(self) -> dict:
         return {

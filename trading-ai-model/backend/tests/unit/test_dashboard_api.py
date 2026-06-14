@@ -27,6 +27,18 @@ def test_dashboard_overview():
     assert "updated_at" in ks
     assert data["system_status"]["kill_switch"]["enabled"] == ks["enabled"]
     assert data.get("source") == "live"
+    assert "watcher_status" in data
+    ws = data["watcher_status"]
+    assert "online" in ws
+    assert "feeding" in ws
+    assert "stale" in ws
+    assert "offline" in ws
+    assert "session_closed" in ws
+    chart = data["watched_charts"][0]
+    assert "feed_status" in chart
+    assert "pipeline_running" in chart
+    assert "execution_ready" in chart
+    assert "watcher_bars_processed" in chart
     assert any(p["id"] == "paper" for p in data["platforms"])
     assert any(p["id"] == "robinhood" for p in data["platforms"])
     assert any(p["name"] == "Tradovate" for p in data["platforms"])

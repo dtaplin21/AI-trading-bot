@@ -27,13 +27,21 @@ import pandas as pd
 
 from agents.news_runtime import get_polling_status
 from config.broker_platforms import build_broker_platforms, primary_execution_broker
+from config.coinbase_symbols import is_coinbase_tradable
 from config.execution_config import (
     coinbase_live_allowed,
     oanda_live_allowed,
     resolve_execution_mode,
 )
+from config.oanda_symbols import is_oanda_tradable
 from risk.risk_runtime import get_risk_engine
 from risk.kill_switch_runtime import get_kill_switch_status
+from chart_watcher.watcher_runtime import (
+    build_watcher_dashboard_summary,
+    compute_feed_status,
+    is_watcher_online,
+    read_watcher_status,
+)
 from config.settings import get_settings
 from config.watchlist import (
     WatchedChart,
@@ -67,12 +75,55 @@ def _get_db() -> Optional[TimescaleStore]:
 def build_watched_charts() -> list[WatchedChart]:
     """
     Watched chart list from WATCHER_SYMBOLS (same as worker).
-    Enriches each entry with latest price + bar count from DB when available.
+    Enriches each entry with latest price + bar count from DB when available,
+    then watcher heartbeat feed status when runtime_controls is populated.
     """
     charts = watcher_charts_for_dashboard(include_session_status=True)
     db = _get_db()
     if db:
         charts = _enrich_from_db(charts, db)
+    charts = _enrich_from_watcher_runtime(charts)
+    return charts
+
+
+def _symbol_execution_ready(chart: WatchedChart, *, kill_switch: bool) -> bool:
+    if kill_switch or chart.feed_status != "feeding":
+        return False
+    settings = get_settings()
+    symbol = chart.symbol.upper()
+    if settings.paper_trading_enabled:
+        return True
+    if oanda_live_allowed(settings) and is_oanda_tradable(symbol):
+        return True
+    if coinbase_live_allowed(settings) and is_coinbase_tradable(symbol):
+        return True
+    return False
+
+
+def _enrich_from_watcher_runtime(charts: list[WatchedChart]) -> list[WatchedChart]:
+    """Attach live worker heartbeat fields per symbol."""
+    watcher_status = read_watcher_status()
+    watcher_online = is_watcher_online(watcher_status)
+    kill_switch = bool((watcher_status or {}).get("kill_switch"))
+    if not kill_switch:
+        kill_switch = get_kill_switch_status()["enabled"]
+    bars_processed = (watcher_status or {}).get("bars_processed") or {}
+    symbol_last_bar = (watcher_status or {}).get("symbol_last_bar") or {}
+
+    for chart in charts:
+        sym = chart.symbol.upper()
+        chart.feed_status = compute_feed_status(
+            watcher_online=watcher_online,
+            symbol=sym,
+            session_open=chart.session_open,
+            watcher_status=watcher_status,
+        )
+        chart.pipeline_running = watcher_online and chart.feed_status == "feeding"
+        chart.watcher_bars_processed = int(bars_processed.get(sym) or bars_processed.get(chart.symbol) or 0)
+        raw_last = symbol_last_bar.get(sym) or symbol_last_bar.get(chart.symbol)
+        chart.watcher_last_bar_at = raw_last if isinstance(raw_last, str) else None
+        chart.execution_ready = _symbol_execution_ready(chart, kill_switch=kill_switch)
+
     return charts
 
 
@@ -188,6 +239,8 @@ def _build_core_dashboard(watched_objs: list[WatchedChart]) -> dict[str, Any]:
     active_broker = primary_execution_broker(settings)
     watched = [c.to_dict() for c in watched_objs]
     grouped = charts_grouped_by_asset_class(watched_objs)
+    watcher_status_raw = read_watcher_status()
+    watcher_summary = build_watcher_dashboard_summary(watched, watcher_status_raw)
     open_positions = build_open_positions()
     now = datetime.now(timezone.utc).isoformat()
 
@@ -213,6 +266,7 @@ def _build_core_dashboard(watched_objs: list[WatchedChart]) -> dict[str, Any]:
         "watched_charts_grouped": grouped,
         "charts_by_class": grouped,
         "watcher_symbol_summary": get_symbol_count(),
+        "watcher_status": watcher_summary,
         "symbol_counts": get_symbol_count(),
         "total_symbols": len(watched),
         "system_status": build_system_status(),
@@ -257,7 +311,12 @@ def _fallback_dashboard() -> dict[str, Any]:
                 "last_bar_at": None,
                 "bar_count": 0,
                 "is_active": False,
-                "status": "watching",
+                "status": "offline",
+                "feed_status": "offline",
+                "pipeline_running": False,
+                "execution_ready": False,
+                "watcher_bars_processed": 0,
+                "watcher_last_bar_at": None,
                 "pipeline_active": False,
                 "tick_value": spec.tick_value if spec else 1.0,
                 "massive_api_symbol": sym,
@@ -277,6 +336,7 @@ def _fallback_dashboard() -> dict[str, Any]:
         "total_symbols": len(symbols),
         "system_status": build_system_status(),
         "session_summary": {"total_open": 0, "total_closed": len(symbols), "by_class": {}},
+        "watcher_status": build_watcher_dashboard_summary(watched_dicts, None),
         "open_positions": [],
         "open_position_count": 0,
         "platforms": [],
