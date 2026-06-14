@@ -2,6 +2,7 @@
  * SystemStatusPanel — connected platforms, open positions, watched charts.
  */
 
+import KillSwitchToggle from "./KillSwitchToggle.jsx";
 import NewsPollingToggle from "./NewsPollingToggle.jsx";
 
 const STATUS_STYLE = {
@@ -262,102 +263,7 @@ function WatchedChartsPanel({ watchedCharts, grouped }) {
   ));
 }
 
-const WATCHER_SYMBOLS_MOCK = [
-  "MES", "ES", "MNQ", "NQ", "CL", "GC", "ZB", "RTY",
-  "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD",
-  "BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD", "XRPUSD",
-  "TSLA", "NVDA", "AAPL", "MSFT", "AMZN",
-];
-
-const MOCK_WATCHED_CHARTS = WATCHER_SYMBOLS_MOCK.map((symbol) => ({
-  symbol,
-  timeframe: "5m",
-  display_name: symbol,
-  label: symbol,
-  asset_class: "unknown",
-  status: "watching",
-  last_bar_at: null,
-  last_price: null,
-}));
-
-export const MOCK_DASHBOARD = {
-  execution_mode: "paper",
-  active_broker: "paper",
-  platform_summary: { connected: 1, configured: 0, total: 11 },
-  oanda_live_ready: false,
-  coinbase_live_ready: false,
-  platforms: [
-    {
-      id: "paper",
-      name: "Paper Trading",
-      category: "simulation",
-      asset_classes: ["futures", "stocks"],
-      status: "connected",
-      detail: "Simulated fills — no capital at risk",
-    },
-    {
-      id: "oanda",
-      name: "OANDA",
-      category: "retail",
-      asset_classes: ["forex"],
-      status: "disconnected",
-      detail: "Set OANDA_API_KEY and OANDA_ACCOUNT_ID; add oanda to ENABLED_BROKERS",
-    },
-    {
-      id: "coinbase",
-      name: "Coinbase",
-      category: "retail",
-      asset_classes: ["crypto"],
-      status: "disconnected",
-      detail: "Set COINBASE_API_KEY and COINBASE_API_SECRET; add coinbase to ENABLED_BROKERS",
-    },
-    {
-      id: "robinhood",
-      name: "Robinhood",
-      category: "retail",
-      asset_classes: ["stocks", "options", "crypto"],
-      status: "disconnected",
-      detail: "Set ROBINHOOD_ACCESS_TOKEN in .env to connect",
-    },
-    {
-      id: "tradovate",
-      name: "Tradovate",
-      category: "futures",
-      asset_classes: ["futures"],
-      status: "disconnected",
-      detail: "Set TRADOVATE_API_KEY and TRADOVATE_USERNAME in .env",
-    },
-    {
-      id: "ibkr",
-      name: "Interactive Brokers",
-      category: "professional",
-      asset_classes: ["futures", "stocks", "options", "forex"],
-      status: "disconnected",
-      detail: "Set IBKR_ACCOUNT_ID and run TWS Gateway",
-    },
-  ],
-  open_positions: [
-    {
-      id: "pos-demo-1",
-      symbol: "MES",
-      direction: "long",
-      entry_price: 5420.25,
-      current_price: 5426.5,
-      stop_loss: 5410,
-      take_profit: 5442,
-      quantity: 2,
-      unrealized_pnl_dollars: 156.25,
-      unrealized_pnl_ticks: 25,
-      platform_id: "tradovate",
-      platform_name: "Tradovate",
-      status: "open",
-    },
-  ],
-  watched_charts: MOCK_WATCHED_CHARTS,
-  watched_chart_count: MOCK_WATCHED_CHARTS.length,
-};
-
-export default function SystemStatusPanel({ dashboard, loading = false, onPollingChange }) {
+export default function SystemStatusPanel({ dashboard, loading = false, onPollingChange, onKillSwitchChange }) {
   if (loading) {
     return (
       <div style={{ padding: "1.5rem 0", color: "var(--color-text-tertiary)", fontSize: 14 }}>
@@ -366,7 +272,26 @@ export default function SystemStatusPanel({ dashboard, loading = false, onPollin
     );
   }
 
-  const data = dashboard || MOCK_DASHBOARD;
+  if (!dashboard) {
+    return (
+      <div
+        style={{
+          padding: "2rem",
+          textAlign: "center",
+          color: "var(--color-text-tertiary)",
+          fontSize: 14,
+          background: "var(--color-background-primary)",
+          border: "0.5px solid var(--color-border-tertiary)",
+          borderRadius: "var(--border-radius-lg)",
+          marginBottom: "2rem",
+        }}
+      >
+        Dashboard data unavailable. Start the API server and refresh.
+      </div>
+    );
+  }
+
+  const data = dashboard;
   const platforms = data.platforms || [];
   const openPositions = data.open_positions || [];
   const watchedCharts = data.watched_charts || [];
@@ -374,6 +299,7 @@ export default function SystemStatusPanel({ dashboard, loading = false, onPollin
 
   const connectedBrokers = platforms.filter((p) => p.status === "connected");
   const otherPlatforms = platforms.filter((p) => p.status !== "connected");
+  const killSwitchActive = data.kill_switch?.enabled === true;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16, marginBottom: "2rem" }}>
@@ -391,10 +317,31 @@ export default function SystemStatusPanel({ dashboard, loading = false, onPollin
         }}
       >
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", flex: 1 }}>
+          {killSwitchActive && (
+            <span
+              style={{
+                fontSize: 11,
+                fontWeight: 600,
+                letterSpacing: "0.04em",
+                color: "#A32D2D",
+                background: "#FAECE7",
+                padding: "4px 8px",
+                borderRadius: "var(--border-radius-sm)",
+              }}
+            >
+              KILL SWITCH ACTIVE
+            </span>
+          )}
           <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
             Mode:{" "}
-            <strong style={{ color: "var(--color-text-primary)" }}>
-              {EXECUTION_MODE_LABEL[data.execution_mode] || data.execution_mode || "paper"}
+            <strong
+              style={{
+                color: killSwitchActive ? "#993C1D" : "var(--color-text-primary)",
+              }}
+            >
+              {killSwitchActive
+                ? `${EXECUTION_MODE_LABEL[data.execution_mode] || data.execution_mode || "paper"} — halted`
+                : EXECUTION_MODE_LABEL[data.execution_mode] || data.execution_mode || "paper"}
             </strong>
           </span>
           {(data.oanda_live_ready || data.coinbase_live_ready) && (
@@ -441,8 +388,17 @@ export default function SystemStatusPanel({ dashboard, loading = false, onPollin
           <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
             <strong>{watchedCharts.length}</strong> charts watched
           </span>
+          {data.source === "fallback" && (
+            <>
+              <span style={{ color: "var(--color-border-tertiary)" }}>|</span>
+              <span style={{ fontSize: 12, color: "#633806" }}>Partial data (API fallback)</span>
+            </>
+          )}
         </div>
-        <NewsPollingToggle polling={data.news_polling} onChange={onPollingChange} />
+        <div style={{ display: "flex", gap: 16, marginLeft: "auto", alignItems: "center" }}>
+          <KillSwitchToggle killSwitch={data.kill_switch} onChange={onKillSwitchChange} />
+          <NewsPollingToggle polling={data.news_polling} onChange={onPollingChange} />
+        </div>
       </div>
 
       <div

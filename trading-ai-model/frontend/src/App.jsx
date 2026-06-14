@@ -19,6 +19,10 @@ export default function App() {
     );
   };
 
+  const handleKillSwitchChange = (updated) => {
+    setDashboard((prev) => (prev ? { ...prev, kill_switch: updated } : prev));
+  };
+
   useEffect(() => {
     let cancelled = false;
 
@@ -69,7 +73,7 @@ export default function App() {
             fontSize: 13,
           }}
         >
-          API unavailable ({error}). Showing fallback data where possible.
+          API unavailable ({error}). Data below may be incomplete or stale.
         </div>
       )}
 
@@ -77,10 +81,11 @@ export default function App() {
         dashboard={dashboard}
         loading={loadingDashboard}
         onPollingChange={handlePollingChange}
+        onKillSwitchChange={handleKillSwitchChange}
       />
 
       <h2 style={{ margin: "0 0 1rem", fontSize: 18, fontWeight: 500 }}>Closed trades</h2>
-      <TradeResultsDashboard trades={trades.length ? trades : undefined} loading={loadingTrades} />
+      <TradeResultsDashboard trades={trades} loading={loadingTrades} />
     </div>
   );
 }

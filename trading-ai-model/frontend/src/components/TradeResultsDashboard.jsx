@@ -17,17 +17,6 @@ const TICK_VALUE = {
   YM: 5.0,
 };
 
-export const MOCK_TRADES = [
-  { id: "t1", symbol: "MES", timestamp: "2026-05-24T09:32:00Z", direction: "long", entry_price: 5412.5, exit_price: 5428.75, stop_loss: 5405.0, take_profit: 5430.0, pnl_dollars: 812.5, pnl_ticks: 65, exit_reason: "target", signal_rank: 86 },
-  { id: "t2", symbol: "NQ", timestamp: "2026-05-24T10:14:00Z", direction: "short", entry_price: 19340.0, exit_price: 19310.0, stop_loss: 19370.0, take_profit: 19300.0, pnl_dollars: 600.0, pnl_ticks: 60, exit_reason: "target", signal_rank: 91 },
-  { id: "t3", symbol: "ES", timestamp: "2026-05-24T11:02:00Z", direction: "long", entry_price: 5418.25, exit_price: 5410.0, stop_loss: 5408.0, take_profit: 5440.0, pnl_dollars: -412.5, pnl_ticks: -33, exit_reason: "stop", signal_rank: 74 },
-  { id: "t4", symbol: "MES", timestamp: "2026-05-23T13:45:00Z", direction: "short", entry_price: 5398.0, exit_price: 5375.5, stop_loss: 5410.0, take_profit: 5372.0, pnl_dollars: 1125.0, pnl_ticks: 90, exit_reason: "target", signal_rank: 88 },
-  { id: "t5", symbol: "RTY", timestamp: "2026-05-23T14:20:00Z", direction: "long", entry_price: 2104.4, exit_price: 2104.4, stop_loss: 2096.0, take_profit: 2120.0, pnl_dollars: 0, pnl_ticks: 0, exit_reason: "manual", signal_rank: 71 },
-  { id: "t6", symbol: "NQ", timestamp: "2026-05-23T15:10:00Z", direction: "long", entry_price: 19280.0, exit_price: 19228.0, stop_loss: 19240.0, take_profit: 19380.0, pnl_dollars: -260.0, pnl_ticks: -52, exit_reason: "stop", signal_rank: 79 },
-  { id: "t7", symbol: "MNQ", timestamp: "2026-05-22T09:50:00Z", direction: "short", entry_price: 19410.0, exit_price: 19350.0, stop_loss: 19450.0, take_profit: 19340.0, pnl_dollars: 300.0, pnl_ticks: 70, exit_reason: "target", signal_rank: 83 },
-  { id: "t8", symbol: "ES", timestamp: "2026-05-22T10:30:00Z", direction: "long", entry_price: 5390.0, exit_price: 5390.0, stop_loss: 5380.0, take_profit: 5410.0, pnl_dollars: 0, pnl_ticks: 0, exit_reason: "timeout", signal_rank: 70 },
-];
-
 const fmt = (n) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(n);
 
@@ -249,7 +238,7 @@ function TradeRow({ trade }) {
   );
 }
 
-export default function TradeResultsDashboard({ trades = MOCK_TRADES, loading = false }) {
+export default function TradeResultsDashboard({ trades = [], loading = false }) {
   const [filter, setFilter] = useState("all");
   const [sort, setSort] = useState("newest");
 
@@ -279,6 +268,14 @@ export default function TradeResultsDashboard({ trades = MOCK_TRADES, loading = 
     return (
       <div style={{ padding: "2rem 0", color: "var(--color-text-tertiary)", fontSize: 14, textAlign: "center" }}>
         Loading trade results…
+      </div>
+    );
+  }
+
+  if (!trades.length) {
+    return (
+      <div style={{ padding: "2rem 0", color: "var(--color-text-tertiary)", fontSize: 14, textAlign: "center" }}>
+        No closed trades yet. Results appear here after paper or live positions close.
       </div>
     );
   }
