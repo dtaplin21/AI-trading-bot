@@ -75,10 +75,37 @@ def test_loaders_for_symbols_groups_asset_classes():
 
 def test_subscribe_channel_formats_polygon_tickers():
     forex = TickDataLoader(symbols=["C:EURUSD"], asset_type="forex")
-    assert forex._subscribe_channel("C:EURUSD") == "C.EURUSD"
+    assert forex._subscribe_channel("C:EURUSD") == "C.EUR/USD"
+    assert forex._subscribe_channel("C:USDJPY") == "C.USD/JPY"
+
+    crypto = TickDataLoader(symbols=["X:BTCUSD"], asset_type="crypto")
+    assert crypto._subscribe_channel("X:BTCUSD") == "XT.BTC-USD"
 
     stocks = TickDataLoader(symbols=["TSLA"], asset_type="stocks")
     assert stocks._subscribe_channel("TSLA") == "T.TSLA"
+
+    futures = TickDataLoader(symbols=["C:MES"], asset_type="futures")
+    assert futures._subscribe_channel("C:MES") == "T.MES"
+
+
+def test_parse_crypto_trade():
+    loader = TickDataLoader(
+        symbols=["X:BTCUSD"],
+        asset_type="crypto",
+        symbol_map={"X:BTCUSD": "BTCUSD", "BTC-USD": "BTCUSD"},
+    )
+    tick = loader._parse_message(
+        {
+            "ev": "XT",
+            "pair": "BTC-USD",
+            "p": 65000.0,
+            "s": 0.1,
+            "t": 1_705_000_000_000,
+        }
+    )
+    assert tick is not None
+    assert tick.symbol == "BTCUSD"
+    assert abs(tick.price - 65000.0) < 1e-6
 
 
 @pytest.mark.asyncio

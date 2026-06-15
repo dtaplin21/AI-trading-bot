@@ -43,6 +43,24 @@ _ASSET_CLASS_TO_WS = {
 }
 
 
+def _forex_ws_pair(body: str) -> str:
+    """EURUSD → EUR/USD for Polygon forex quote subscriptions (C.EUR/USD)."""
+    normalized = body.upper().replace("/", "").replace("-", "").strip()
+    if len(normalized) == 6:
+        return f"{normalized[:3]}/{normalized[3:]}"
+    return body
+
+
+def _crypto_ws_pair(body: str) -> str:
+    """BTCUSD → BTC-USD for Polygon crypto trade subscriptions (XT.BTC-USD)."""
+    normalized = body.upper().replace("/", "").replace("-", "").strip()
+    if normalized.endswith("USD") and len(normalized) > 3:
+        return f"{normalized[:-3]}-USD"
+    if len(normalized) == 6:
+        return f"{normalized[:3]}-{normalized[3:]}"
+    return body
+
+
 def tick_timestamp(raw) -> datetime:
     """Normalize Polygon tick time (ns, ms, or seconds) to UTC datetime."""
     if isinstance(raw, datetime):
@@ -175,14 +193,32 @@ class TickDataLoader:
                 yield tick
 
     def _subscribe_channel(self, symbol: str) -> str:
+        """
+        Polygon WebSocket channel names differ from REST tickers:
+          forex  C.EUR/USD   (not C.EURUSD)
+          crypto XT.BTC-USD  (not X.BTCUSD)
+          stocks T.AAPL
+          futures T.MES      (futures socket; not F.MES)
+        """
         if "." in symbol and ":" not in symbol:
             return symbol
         if ":" in symbol:
             prefix, body = symbol.split(":", 1)
+            pfx = prefix.upper()
+            if pfx == "X":
+                return f"XT.{_crypto_ws_pair(body)}"
+            if pfx == "C" and self.asset_type == "forex":
+                return f"C.{_forex_ws_pair(body)}"
+            if pfx == "C" and self.asset_type == "futures":
+                return f"T.{body.upper()}"
             return f"{prefix}.{body}"
-        prefix_map = {"forex": "C", "crypto": "X", "stocks": "T", "futures": "F"}
-        prefix = prefix_map.get(self.asset_type, "T")
-        return f"{prefix}.{symbol}"
+        if self.asset_type == "crypto":
+            return f"XT.{_crypto_ws_pair(symbol)}"
+        if self.asset_type == "forex":
+            return f"C.{_forex_ws_pair(symbol)}"
+        if self.asset_type == "futures":
+            return f"T.{symbol.upper()}"
+        return f"T.{symbol.upper()}"
 
     def _resolve_symbol(self, raw: str) -> str:
         if not raw:
@@ -323,8 +359,14 @@ def loaders_for_symbols(
     for asset_type, pairs in groups.items():
         symbol_map = {polygon: internal for internal, polygon in pairs}
         for internal, polygon in pairs:
+            body = polygon.split(":", 1)[-1] if ":" in polygon else polygon
             symbol_map.setdefault(normalize_symbol(polygon), internal)
-            if "/" in polygon:
+            symbol_map.setdefault(normalize_symbol(body), internal)
+            if asset_type == "forex":
+                symbol_map.setdefault(_forex_ws_pair(body), internal)
+            elif asset_type == "crypto":
+                symbol_map.setdefault(_crypto_ws_pair(body), internal)
+            elif "/" in polygon:
                 symbol_map.setdefault(polygon, internal)
         loaders.append(
             TickDataLoader(
