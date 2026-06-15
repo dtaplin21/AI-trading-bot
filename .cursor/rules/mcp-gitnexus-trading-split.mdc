@@ -1,0 +1,44 @@
+---
+description: Use GitNexus for code intelligence; trading-agents MCP for live ops
+globs: trading-ai-model/backend/pipeline/**,trading-ai-model/backend/agents/**,trading-ai-model/backend/chart_watcher/**,trading-ai-model/backend/trading_mcp/**,trading-ai-model/backend/live/**,trading-ai-model/backend/risk/**
+alwaysApply: false
+---
+
+# MCP split — GitNexus vs trading-agents
+
+## Before editing (GitNexus)
+
+For changes under pipeline, registry, level gate, chart watcher, execution, or MCP wiring:
+
+1. Use **GitNexus** to trace callers, dependencies, and blast radius.
+2. Summarize impact in 3–5 bullets before writing code.
+3. Edit the **minimum** set of files; run targeted pytest after.
+
+**High-risk symbols** (always trace when touched):
+
+- `TradingPipelineSupervisor`, `_run_level_confirm_path`, `_run_methods_concurrent`
+- `get_all_method_agents_from_registry`, `get_confirm_method_agents_from_registry`
+- `LevelEntryGate`, `LevelSetup`, `apply_level_to_plan`
+- `ChartWatchRunner`, `BarAssembler`, `LiveExecutionAgent`, `LivePositionMonitor`
+- `AgentRegistry`, `RemoteAgentProxy`, `agents.yaml`
+
+**Example pre-edit prompt:**
+
+> Use GitNexus to trace every caller and dependency for [symbol/module]. Summarize blast radius, then propose the smallest safe diff.
+
+**GitNexus tools:** `query`, `context`, `impact`, `detect_changes` — not for running the bot.
+
+## Runtime ops (trading-agents MCP)
+
+Use **trading-agents** only for live/debug actions:
+
+- `list_agents`, `set_agent_config`, `reload_config`
+- `get_level_watchlist`, `check_level_gate`, `get_recent_touches`
+- `get_risk_summary`, `set_kill_switch`, `get_pipeline_status`
+
+Do **not** use trading-agents MCP for codebase graph questions — use GitNexus or Cursor search.
+
+## After edits
+
+- Run relevant tests: `tests/unit/test_level_entry_gate.py`, `test_trading_pipeline_supervisor.py`, `test_agent_registry.py`, `test_trading_mcp.py`
+- Re-index if large refactors: `npx gitnexus analyze` (from repo root)

@@ -1,5 +1,9 @@
 {
   "mcpServers": {
+    "gitnexus": {
+      "command": "npx",
+      "args": ["-y", "gitnexus@latest", "mcp"]
+    },
     "trading-agents": {
       "command": "/Users/dtaplin21/AI-trading-bot/trading-ai-model/backend/.venv/bin/python",
       "args": ["-m", "trading_mcp.trading_server"],
@@ -7,7 +11,7 @@
       "env": {
         "PYTHONPATH": "/Users/dtaplin21/AI-trading-bot/trading-ai-model/backend",
         "AGENT_CONFIG_PATH": "/Users/dtaplin21/AI-trading-bot/trading-ai-model/backend/config/agents.yaml",
-        "DATABASE_URL": "<paste from trading-ai-model/backend/.env>",
+        "DATABASE_URL": "postgresql://trading:4ixNOaOwwy4lEnVqCYdjv4LMjo5e2mwM@dpg-d8ed4h4m0tmc73eof7a0-a.oregon-postgres.render.com/trading_ai_mu7s?sslmode=require",
         "DATABASE_SSL_DISABLE": "true",
         "PAPER_MODE": "true",
         "RISK_KILL_SWITCH": "false",
