@@ -16,6 +16,7 @@ from config.execution_config import coinbase_live_allowed
 from config.settings import get_settings
 from live.broker_router import get_broker_router
 from live.sync_broker import action_to_side, broker_order_to_result, run_broker
+from risk.order_sizing_runtime import coinbase_order_usd
 
 logger = logging.getLogger(__name__)
 
@@ -50,17 +51,17 @@ class CoinbaseExecutor:
             return {"status": "error", "message": str(exc)}
 
         quote_size = signal.get("quote_size_usd") or signal.get("notional_usd")
-        entry = float(signal.get("entry") or 0)
         if quote_size is None:
-            size = max(1, int(signal.get("size") or 1))
-            quote_size = min(
-                float(self._settings.coinbase_max_order_usd),
-                entry * size if entry > 0 else float(self._settings.coinbase_max_order_usd),
-            )
-        quote_size = min(float(quote_size), float(self._settings.coinbase_max_order_usd))
+            quote_size = coinbase_order_usd()
+        quote_size = min(
+            float(quote_size),
+            coinbase_order_usd(),
+            float(self._settings.coinbase_max_order_usd),
+        )
         if quote_size <= 0:
             return {"status": "error", "message": "invalid quote_size"}
 
+        entry = float(signal.get("entry") or 0)
         if entry > 0:
             quantity = quote_size / entry
         else:

@@ -555,6 +555,7 @@ class RiskDecision(BaseModel):
     timestamp: datetime
     position_size_contracts: int = 0
     max_notional_usd: float = 0.0
+    oanda_order_usd: float = 0.0
     stop_loss_ticks: int = 0
     take_profit_ticks: int = 0
     risk_reward_ratio: float = 0.0

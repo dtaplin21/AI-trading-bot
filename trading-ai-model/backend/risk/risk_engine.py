@@ -29,6 +29,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
+from config.coinbase_symbols import is_coinbase_tradable
+from config.oanda_symbols import is_oanda_tradable
 from config.agent_config import TRADING_PHILOSOPHY
 from pipeline.confluence_report import ConfluenceReport
 from pipeline.probability_gate import ProbabilityGate
@@ -36,6 +38,7 @@ from pipeline.schemas import FusedFeatureSet, RiskDecision, TradeAction, TradePl
 from pipeline.level_setup import LevelSetup
 from risk.correlation_checker import get_correlation_checker
 from risk.kill_switch_runtime import is_kill_switch_active
+from risk.order_sizing_runtime import coinbase_order_usd, get_order_sizing, oanda_order_usd
 
 logger = logging.getLogger(__name__)
 
@@ -317,29 +320,22 @@ class RiskEngine:
             if approved
             else 0
         )
-        max_notional = 0.0
-        if _env_optional_float("RISK_ACCOUNT_CAP_USD") is not None or self._max_order_notional:
-            max_order = self._max_order_notional or (self._account_cap_usd * 0.1)
-            notional_usd = self._estimate_order_notional(plan, contracts)
-            if approved and notional_usd > max_order:
-                rejections.append(
-                    f"Order notional ${notional_usd:.2f} exceeds max ${max_order:.2f}."
-                )
-                approved = False
-            if approved and notional_usd > self._account_cap_usd:
-                rejections.append(
-                    f"Order notional ${notional_usd:.2f} exceeds account cap "
-                    f"${self._account_cap_usd:.0f}."
-                )
-                approved = False
-            max_notional = min(max_order, self._account_cap_usd) if approved else 0.0
+        order_usd = self._target_order_usd(plan.symbol) if approved else 0.0
+        if approved and order_usd > self._account_cap_usd:
+            rejections.append(
+                f"Order size ${order_usd:.2f} exceeds account cap ${self._account_cap_usd:.0f}."
+            )
+            approved = False
+            order_usd = 0.0
+            contracts = 0
 
         result = RiskDecision(
             approved=approved,
             symbol=plan.symbol,
             timestamp=datetime.now(tz=timezone.utc),
             position_size_contracts=contracts,
-            max_notional_usd=round(max_notional, 2),
+            max_notional_usd=round(order_usd, 2),
+            oanda_order_usd=round(oanda_order_usd(), 2) if is_oanda_tradable(plan.symbol) else 0.0,
             risk_reward_ratio=round(rr_ratio, 2),
             rejection_reasons=rejections,
             daily_loss_remaining_pct=remaining_pct,
@@ -434,29 +430,22 @@ class RiskEngine:
             if approved
             else 0
         )
-        max_notional = 0.0
-        if _env_optional_float("RISK_ACCOUNT_CAP_USD") is not None or self._max_order_notional:
-            max_order = self._max_order_notional or (self._account_cap_usd * 0.1)
-            notional_usd = self._estimate_order_notional(plan, contracts)
-            if approved and notional_usd > max_order:
-                rejections.append(
-                    f"Order notional ${notional_usd:.2f} exceeds max ${max_order:.2f}."
-                )
-                approved = False
-            if approved and notional_usd > self._account_cap_usd:
-                rejections.append(
-                    f"Order notional ${notional_usd:.2f} exceeds account cap "
-                    f"${self._account_cap_usd:.0f}."
-                )
-                approved = False
-            max_notional = min(max_order, self._account_cap_usd) if approved else 0.0
+        order_usd = self._target_order_usd(plan.symbol) if approved else 0.0
+        if approved and order_usd > self._account_cap_usd:
+            rejections.append(
+                f"Order size ${order_usd:.2f} exceeds account cap ${self._account_cap_usd:.0f}."
+            )
+            approved = False
+            order_usd = 0.0
+            contracts = 0
 
         result = RiskDecision(
             approved=approved,
             symbol=plan.symbol,
             timestamp=datetime.now(tz=timezone.utc),
             position_size_contracts=contracts,
-            max_notional_usd=round(max_notional, 2),
+            max_notional_usd=round(order_usd, 2),
+            oanda_order_usd=round(oanda_order_usd(), 2) if is_oanda_tradable(plan.symbol) else 0.0,
             risk_reward_ratio=round(rr_ratio, 2),
             rejection_reasons=rejections,
             daily_loss_remaining_pct=remaining_pct,
@@ -577,24 +566,27 @@ class RiskEngine:
 
         return min(base, self._max_contracts)
 
-    def _estimate_order_notional(self, plan: TradePlan, contracts: int) -> float:
-        from config.coinbase_symbols import is_coinbase_tradable
-
+    def _target_order_usd(self, symbol: str) -> float:
+        sym = symbol.upper()
+        if is_coinbase_tradable(sym):
+            return coinbase_order_usd()
+        if is_oanda_tradable(sym):
+            return oanda_order_usd()
         max_order = self._max_order_notional or (self._account_cap_usd * 0.1)
-        if is_coinbase_tradable(plan.symbol):
-            return max_order
-        if not plan.entry_price:
-            return 0.0
-        return abs(float(plan.entry_price)) * max(1, contracts)
+        return max_order
 
     def risk_summary(self) -> dict:
         """Dashboard / status payload."""
         daily_limit = self._daily_limiter.daily_loss_limit_usd()
+        sizing = get_order_sizing()
         return {
             "account_cap_usd": self._account_cap_usd,
             "max_daily_loss_usd": daily_limit,
             "max_order_notional_usd": self._max_order_notional
             or (self._account_cap_usd * 0.1),
+            "coinbase_order_usd": sizing["coinbase_order_usd"],
+            "oanda_order_usd": sizing["oanda_order_usd"],
+            "order_sizing_limits": sizing["limits"],
             "daily_pnl_usd": round(self._daily_limiter._daily_pnl, 2),
             "daily_loss_remaining_usd": round(
                 daily_limit + self._daily_limiter._daily_pnl, 2

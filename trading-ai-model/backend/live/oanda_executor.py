@@ -15,7 +15,9 @@ from config.execution_config import oanda_live_allowed
 from config.oanda_symbols import is_oanda_tradable
 from config.settings import get_settings
 from live.broker_router import get_broker_router
+from live.oanda_sizing import usd_to_units
 from live.sync_broker import action_to_side, broker_order_to_result, run_broker
+from risk.order_sizing_runtime import oanda_order_usd
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +47,11 @@ class OandaExecutor:
         except ValueError as exc:
             return {"status": "error", "message": str(exc)}
 
-        units = int(signal.get("units") or self._settings.oanda_default_units)
+        order_usd = float(signal.get("order_usd") or oanda_order_usd())
+        entry = float(signal.get("entry") or 0)
+        units = int(signal.get("units") or 0)
+        if units <= 0:
+            units = usd_to_units(symbol, order_usd, entry)
         units = max(1, min(units, int(self._settings.oanda_max_units)))
         client_ref = str(uuid.uuid4())
 

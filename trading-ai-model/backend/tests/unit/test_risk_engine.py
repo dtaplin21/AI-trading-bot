@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 import risk.kill_switch_runtime as kill_switch_runtime
+import risk.order_sizing_runtime as order_sizing_runtime
 from pipeline.confluence_report import ConfluenceReport
 from pipeline.schemas import FusedFeatureSet, TradeAction, TradePlan
 from paper_trading.position_book import reset_position_book
@@ -18,8 +19,11 @@ def kill_switch_off(monkeypatch):
     monkeypatch.setenv("RISK_KILL_SWITCH", "false")
     monkeypatch.setattr(kill_switch_runtime, "_read_postgres", lambda: (None, None))
     kill_switch_runtime.reset_kill_switch_runtime()
+    monkeypatch.setattr(order_sizing_runtime, "_database_url", lambda: None)
+    order_sizing_runtime.reset_order_sizing_runtime()
     yield
     kill_switch_runtime.reset_kill_switch_runtime()
+    order_sizing_runtime.reset_order_sizing_runtime()
 
 
 def _plan(action=TradeAction.ENTER_LONG) -> TradePlan:
@@ -153,3 +157,35 @@ def test_record_outcome_tracks_consecutive_losses():
     assert engine._consecutive_losses == 2
     engine.record_outcome(100.0)
     assert engine._consecutive_losses == 0
+
+
+def test_approve_uses_runtime_coinbase_order_usd(monkeypatch):
+    reset_position_book()
+    monkeypatch.setattr(order_sizing_runtime, "_write_postgres", lambda cb, oa: None)
+    order_sizing_runtime.set_order_sizing(coinbase_order_usd=25, oanda_order_usd=10)
+
+    engine = RiskEngine()
+    plan = _plan()
+    plan = plan.model_copy(update={"symbol": "BTCUSD"})
+    result = engine.approve(
+        plan=plan,
+        fused=_fused(symbol="BTCUSD"),
+        confluence=_confluence(symbol="BTCUSD"),
+        p_success=0.70,
+        ev_dollars=10.0,
+        sample_size=500,
+        signal_rank=75,
+    )
+    assert result.approved is True
+    assert result.max_notional_usd == 25.0
+    assert result.oanda_order_usd == 0.0
+
+
+def test_risk_summary_includes_order_sizing(monkeypatch):
+    monkeypatch.setenv("RISK_DEFAULT_ORDER_USD", "7")
+    order_sizing_runtime.reset_order_sizing_runtime()
+    engine = RiskEngine()
+    summary = engine.risk_summary()
+    assert summary["coinbase_order_usd"] == 7.0
+    assert summary["oanda_order_usd"] == 7.0
+    assert "order_sizing_limits" in summary

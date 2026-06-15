@@ -21,6 +21,13 @@ def test_dashboard_overview():
     assert "session_summary" in data
     assert "system_status" in data
     assert "kill_switch" in data
+    assert "order_sizing" in data
+    os = data["order_sizing"]
+    assert "coinbase_order_usd" in os
+    assert "oanda_order_usd" in os
+    assert "limits" in os
+    assert "coinbase_order_usd" in data["risk_limits"]
+    assert "oanda_order_usd" in data["risk_limits"]
     ks = data["kill_switch"]
     assert "enabled" in ks
     assert "env_default" in ks

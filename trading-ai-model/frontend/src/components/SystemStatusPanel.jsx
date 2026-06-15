@@ -4,6 +4,7 @@
 
 import KillSwitchToggle from "./KillSwitchToggle.jsx";
 import NewsPollingToggle from "./NewsPollingToggle.jsx";
+import OrderSizingControl from "./OrderSizingControl.jsx";
 
 const STATUS_STYLE = {
   connected: { bg: "#EAF3DE", text: "#27500A", label: "Connected" },
@@ -290,7 +291,13 @@ function WatchedChartsPanel({ watchedCharts, grouped, watcherStatus }) {
   );
 }
 
-export default function SystemStatusPanel({ dashboard, loading = false, onPollingChange, onKillSwitchChange }) {
+export default function SystemStatusPanel({
+  dashboard,
+  loading = false,
+  onPollingChange,
+  onKillSwitchChange,
+  onOrderSizingChange,
+}) {
   if (loading) {
     return (
       <div style={{ padding: "1.5rem 0", color: "var(--color-text-tertiary)", fontSize: 14 }}>
@@ -442,7 +449,8 @@ export default function SystemStatusPanel({ dashboard, loading = false, onPollin
             </>
           )}
         </div>
-        <div style={{ display: "flex", gap: 16, marginLeft: "auto", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 16, marginLeft: "auto", alignItems: "flex-start", flexWrap: "wrap" }}>
+          <OrderSizingControl orderSizing={data.order_sizing} onChange={onOrderSizingChange} />
           <KillSwitchToggle killSwitch={data.kill_switch} onChange={onKillSwitchChange} />
           <NewsPollingToggle polling={data.news_polling} onChange={onPollingChange} />
         </div>

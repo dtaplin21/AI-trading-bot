@@ -23,6 +23,25 @@ export default function App() {
     setDashboard((prev) => (prev ? { ...prev, kill_switch: updated } : prev));
   };
 
+  const handleOrderSizingChange = (updated) => {
+    setDashboard((prev) =>
+      prev
+        ? {
+            ...prev,
+            order_sizing: updated,
+            risk_limits: prev.risk_limits
+              ? {
+                  ...prev.risk_limits,
+                  coinbase_order_usd: updated.coinbase_order_usd,
+                  oanda_order_usd: updated.oanda_order_usd,
+                  order_sizing_limits: updated.limits,
+                }
+              : prev.risk_limits,
+          }
+        : prev
+    );
+  };
+
   useEffect(() => {
     let cancelled = false;
 
@@ -82,6 +101,7 @@ export default function App() {
         loading={loadingDashboard}
         onPollingChange={handlePollingChange}
         onKillSwitchChange={handleKillSwitchChange}
+        onOrderSizingChange={handleOrderSizingChange}
       />
 
       <h2 style={{ margin: "0 0 1rem", fontSize: 18, fontWeight: 500 }}>Closed trades</h2>

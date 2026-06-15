@@ -35,6 +35,7 @@ from config.execution_config import (
 )
 from config.oanda_symbols import is_oanda_tradable
 from risk.risk_runtime import get_risk_engine
+from risk.order_sizing_runtime import get_order_sizing
 from risk.kill_switch_runtime import get_kill_switch_status
 from chart_watcher.watcher_runtime import (
     build_watcher_dashboard_summary,
@@ -250,6 +251,7 @@ def _build_core_dashboard(watched_objs: list[WatchedChart]) -> dict[str, Any]:
         "execution_mode": resolve_execution_mode(settings),
         "coinbase_live_ready": coinbase_live_allowed(settings),
         "oanda_live_ready": oanda_live_allowed(settings),
+        "order_sizing": get_order_sizing(),
         "risk_limits": get_risk_engine().risk_summary(),
         "active_broker": active_broker,
         "platforms": platforms,

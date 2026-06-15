@@ -119,12 +119,15 @@ class ExecutionAgent(BaseAgent):
             raise ValueError("trade_plan and risk required for execution")
 
         risk_meta = ctx.metadata.get("risk_decision") or {}
-        units = int(risk_meta.get("oanda_units") or 0) or None
 
         order = {
             "symbol": ctx.symbol,
             "action": trade_plan.action.value,
-            "units": units,
+            "entry": trade_plan.entry_price,
+            "order_usd": float(
+                risk_meta.get("oanda_order_usd") or risk_meta.get("max_notional_usd") or 0
+            ),
+            "units": int(risk_meta.get("oanda_units") or 0) or None,
             "snapshot_id": ctx.metadata.get("world_state_snapshot_id", ""),
             "timeframe": ctx.timeframe,
         }
