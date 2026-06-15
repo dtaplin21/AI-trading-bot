@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock
+
+import pytest
 
 from data.loaders.tick_data_loader import (
     Tick,
@@ -75,3 +79,34 @@ def test_subscribe_channel_formats_polygon_tickers():
 
     stocks = TickDataLoader(symbols=["TSLA"], asset_type="stocks")
     assert stocks._subscribe_channel("TSLA") == "T.TSLA"
+
+
+@pytest.mark.asyncio
+async def test_authenticate_ws_waits_past_connected_for_auth_success():
+    loader = TickDataLoader(symbols=["X:BTCUSD"], api_key="test-key", asset_type="crypto")
+    connected = json.dumps(
+        [{"ev": "status", "status": "connected", "message": "Connected Successfully"}]
+    )
+    auth_ok = json.dumps(
+        [{"ev": "status", "status": "auth_success", "message": "authenticated"}]
+    )
+
+    ws = AsyncMock()
+    ws.recv = AsyncMock(side_effect=[connected, auth_ok])
+
+    assert await loader._authenticate_ws(ws) is True
+    ws.send.assert_called_once()
+    assert ws.recv.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_authenticate_ws_fails_on_auth_failed():
+    loader = TickDataLoader(symbols=["X:BTCUSD"], api_key="bad-key", asset_type="crypto")
+    connected = json.dumps([{"ev": "status", "status": "connected"}])
+    auth_fail = json.dumps([{"ev": "status", "status": "auth_failed", "message": "invalid"}])
+
+    ws = AsyncMock()
+    ws.recv = AsyncMock(side_effect=[connected, auth_fail])
+
+    assert await loader._authenticate_ws(ws) is False
+    assert ws.recv.call_count == 2

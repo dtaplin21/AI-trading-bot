@@ -134,12 +134,10 @@ class TickDataLoader:
                 async with websockets.connect(self.ws_url, ping_interval=20) as ws:
                     reconnect_delay = 1
 
-                    await ws.send(json.dumps({"action": "auth", "params": self.api_key}))
-                    auth_resp = json.loads(await ws.recv())
-                    messages = auth_resp if isinstance(auth_resp, list) else [auth_resp]
-                    if not any(m.get("status") == "auth_success" for m in messages):
-                        logger.error("Polygon WebSocket auth failed: %s", auth_resp)
-                        break
+                    if not await self._authenticate_ws(ws):
+                        await asyncio.sleep(reconnect_delay)
+                        reconnect_delay = min(reconnect_delay * 2, 30)
+                        continue
 
                     channels = ",".join(self._subscribe_channel(sym) for sym in self.symbols)
                     await ws.send(json.dumps({"action": "subscribe", "params": channels}))
@@ -264,6 +262,37 @@ class TickDataLoader:
 
     def stop(self) -> None:
         self._running = False
+
+    async def _authenticate_ws(self, ws) -> bool:
+        """
+        Polygon sends `connected` before `auth_success` on separate messages.
+        Read until auth succeeds/fails or times out.
+        """
+        if not self.api_key:
+            logger.error("Polygon WebSocket auth failed: POLYGON_API_KEY not set")
+            return False
+
+        await ws.send(json.dumps({"action": "auth", "params": self.api_key}))
+
+        for _ in range(10):
+            try:
+                raw = await asyncio.wait_for(ws.recv(), timeout=10.0)
+            except asyncio.TimeoutError:
+                logger.error("Polygon WebSocket auth timed out waiting for auth_success")
+                return False
+
+            payload = json.loads(raw)
+            messages = payload if isinstance(payload, list) else [payload]
+            for msg in messages:
+                status = msg.get("status")
+                if status == "auth_success":
+                    return True
+                if status == "auth_failed":
+                    logger.error("Polygon WebSocket auth failed: %s", msg)
+                    return False
+
+        logger.error("Polygon WebSocket auth failed: no auth_success after %d messages", 10)
+        return False
 
 
 def loaders_for_symbols(
