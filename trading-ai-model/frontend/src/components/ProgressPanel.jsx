@@ -34,10 +34,11 @@ export default function ProgressPanel({ data, loading }) {
     : null;
 
   return (
-    <div style={{ color: "#e5e7eb", fontFamily: "sans-serif" }}>
+    <div style={{ color: "var(--color-text-primary, #1a1a18)", fontFamily: "sans-serif" }}>
       <div
         style={{
           background: "#111827",
+          color: "#e5e7eb",
           borderRadius: 8,
           padding: "14px 18px",
           marginBottom: 20,
@@ -47,7 +48,7 @@ export default function ProgressPanel({ data, loading }) {
         }}
       >
         <div>
-          <span style={{ fontWeight: 700, fontSize: 16 }}>Fast lane progress</span>
+          <span style={{ fontWeight: 700, fontSize: 16, color: "#fff" }}>Fast lane progress</span>
           {updatedAgo != null && (
             <span style={{ color: "#6b7280", fontSize: 12, marginLeft: 12 }}>
               Updated {updatedAgo}s ago
@@ -79,7 +80,7 @@ export default function ProgressPanel({ data, loading }) {
       </div>
 
       {thresholds && (
-        <div style={{ fontSize: 11, color: "#4b5563", marginBottom: 16 }}>
+        <div style={{ fontSize: 11, color: "var(--color-text-secondary, #5f5e5a)", marginBottom: 16 }}>
           Thresholds: {thresholds.min_touches} touches · {(thresholds.min_hold_rate * 100).toFixed(0)}% hold ·
           EV ≥ {thresholds.min_ev_pct}% · within {thresholds.tolerance_pct}%
         </div>
@@ -90,9 +91,9 @@ export default function ProgressPanel({ data, loading }) {
           display: "flex",
           gap: 12,
           padding: "6px 0",
-          borderBottom: "1px solid #374151",
+          borderBottom: "1px solid var(--color-border-tertiary, #e3e1da)",
           fontSize: 11,
-          color: "#6b7280",
+          color: "var(--color-text-secondary, #5f5e5a)",
           fontWeight: 600,
         }}
       >
@@ -130,7 +131,7 @@ export default function ProgressPanel({ data, loading }) {
               {label} ({rows.length})
             </div>
             {rows.length === 0 ? (
-              <div style={{ color: "#4b5563", fontSize: 13, padding: "8px 0" }}>
+              <div style={{ color: "var(--color-text-secondary, #5f5e5a)", fontSize: 13, padding: "8px 0" }}>
                 None
               </div>
             ) : (
@@ -148,7 +149,8 @@ export default function ProgressPanel({ data, loading }) {
             style={{
               fontWeight: 700,
               fontSize: 13,
-              borderBottom: "1px solid #374151",
+              color: "var(--color-text-primary, #1a1a18)",
+              borderBottom: "1px solid var(--color-border-tertiary, #e3e1da)",
               paddingBottom: 4,
               marginBottom: 8,
             }}
@@ -163,14 +165,15 @@ export default function ProgressPanel({ data, loading }) {
                 gap: 16,
                 padding: "6px 0",
                 fontSize: 13,
-                borderBottom: "1px solid #111827",
+                color: "var(--color-text-primary, #1a1a18)",
+                borderBottom: "1px solid var(--color-border-tertiary, #e3e1da)",
               }}
             >
               <span style={{ width: 80, fontWeight: 600 }}>{t.symbol}</span>
               <span style={{ width: 100, fontFamily: "monospace" }}>
                 @ {t.price_at_touch?.toFixed(5) ?? t.level_price}
               </span>
-              <span style={{ color: "#9ca3af" }}>
+              <span style={{ color: "var(--color-text-secondary, #5f5e5a)" }}>
                 {t.touched_at ? new Date(t.touched_at).toLocaleTimeString() : "—"}
               </span>
               <span

@@ -24,9 +24,10 @@ export default function ProgressRow({ entry }) {
   return (
     <div
       style={{
-        borderBottom: "1px solid #1f2937",
+        borderBottom: "1px solid var(--color-border-tertiary, #e3e1da)",
         padding: "10px 0",
         cursor: "pointer",
+        color: "var(--color-text-primary, #1a1a18)",
       }}
       onClick={() => setOpen((o) => !o)}
     >
@@ -35,7 +36,7 @@ export default function ProgressRow({ entry }) {
         <span style={{ width: 100, fontFamily: "monospace" }}>
           {entry.level_price?.toFixed(5)}
         </span>
-        <span style={{ width: 70, color: "#9ca3af" }}>
+        <span style={{ width: 70, color: "var(--color-text-secondary, #5f5e5a)" }}>
           {entry.distance_pct != null ? `${entry.distance_pct.toFixed(2)}%` : "—"}
         </span>
         <span style={{ width: 80 }}>
@@ -55,7 +56,7 @@ export default function ProgressRow({ entry }) {
           {entry.optimal_rr != null ? entry.optimal_rr.toFixed(1) : "—"}
         </span>
 
-        <div style={{ flex: 1, background: "#1f2937", borderRadius: 4, height: 6 }}>
+        <div style={{ flex: 1, background: "var(--color-border-tertiary, #e3e1da)", borderRadius: 4, height: 6 }}>
           <div
             style={{
               width: `${pct}%`,
@@ -77,12 +78,13 @@ export default function ProgressRow({ entry }) {
             marginTop: 10,
             marginLeft: 80,
             background: "#111827",
+            color: "#e5e7eb",
             borderRadius: 6,
             padding: "10px 14px",
           }}
           onClick={(e) => e.stopPropagation()}
         >
-          <div style={{ fontWeight: 600, marginBottom: 8 }}>
+          <div style={{ fontWeight: 600, marginBottom: 8, color: "#fff" }}>
             {entry.symbol} @ {entry.level_price?.toFixed(5)} —{" "}
             <span style={{ color: bucketColor }}>
               {entry.bucket === "at_line"
