@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from agents.news_runtime import start_news_background
-from api.routes import backtest, dashboard, health, market_state, models, news, risk, signals, trades
+from api.routes import backtest, dashboard, health, market_state, models, news, progress, risk, signals, trades
 from learning.runtime import get_learning_agent
 
 _DEFAULT_CORS_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
@@ -42,6 +42,7 @@ app.include_router(backtest.router, prefix="/backtest", tags=["backtest"])
 app.include_router(market_state.router, prefix="/state", tags=["market_state"])
 app.include_router(trades.router, prefix="/trades", tags=["trades"])
 app.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
+app.include_router(progress.router, prefix="/progress", tags=["progress"])
 app.include_router(models.router)
 app.include_router(news.router, prefix="/news", tags=["news"])
 app.include_router(risk.router, prefix="/risk", tags=["risk"])

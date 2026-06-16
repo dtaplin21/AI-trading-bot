@@ -1,16 +1,21 @@
 import { useEffect, useState } from "react";
 import TradeResultsDashboard from "./components/TradeResultsDashboard.jsx";
 import SystemStatusPanel from "./components/SystemStatusPanel.jsx";
+import ProgressPanel from "./components/ProgressPanel.jsx";
 import { fetchTrades } from "./api/trades.js";
 import { fetchDashboard } from "./api/dashboard.js";
+import { fetchProgress } from "./api/progress.js";
 
 const REFRESH_MS = 30_000;
 
 export default function App() {
+  const [tab, setTab] = useState("dashboard");
   const [trades, setTrades] = useState([]);
   const [dashboard, setDashboard] = useState(null);
+  const [progress, setProgress] = useState(null);
   const [loadingTrades, setLoadingTrades] = useState(true);
   const [loadingDashboard, setLoadingDashboard] = useState(true);
+  const [loadingProgress, setLoadingProgress] = useState(false);
   const [error, setError] = useState(null);
 
   const handlePollingChange = (updatedPolling) => {
@@ -72,6 +77,22 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (tab !== "progress") return;
+
+    setLoadingProgress(true);
+    fetchProgress()
+      .then(setProgress)
+      .catch(() => setProgress(null))
+      .finally(() => setLoadingProgress(false));
+
+    const interval = setInterval(() => {
+      fetchProgress().then(setProgress).catch(() => {});
+    }, REFRESH_MS);
+
+    return () => clearInterval(interval);
+  }, [tab]);
+
   return (
     <div style={{ maxWidth: 1100, margin: "0 auto", padding: "2rem 1.25rem" }}>
       <header style={{ marginBottom: "1.5rem" }}>
@@ -81,7 +102,30 @@ export default function App() {
         </p>
       </header>
 
-      {error && (
+      <nav style={{ display: "flex", gap: 16, marginBottom: "1.5rem" }}>
+        {["dashboard", "progress"].map((t) => (
+          <button
+            key={t}
+            type="button"
+            onClick={() => setTab(t)}
+            style={{
+              background: tab === t ? "#3b82f6" : "transparent",
+              color: tab === t ? "#fff" : "#9ca3af",
+              border: "1px solid",
+              borderColor: tab === t ? "#3b82f6" : "#374151",
+              borderRadius: 6,
+              padding: "6px 18px",
+              cursor: "pointer",
+              fontWeight: tab === t ? 700 : 400,
+              textTransform: "capitalize",
+            }}
+          >
+            {t === "dashboard" ? "Dashboard" : "Progress"}
+          </button>
+        ))}
+      </nav>
+
+      {error && tab === "dashboard" && (
         <div
           style={{
             marginBottom: "1rem",
@@ -96,16 +140,22 @@ export default function App() {
         </div>
       )}
 
-      <SystemStatusPanel
-        dashboard={dashboard}
-        loading={loadingDashboard}
-        onPollingChange={handlePollingChange}
-        onKillSwitchChange={handleKillSwitchChange}
-        onOrderSizingChange={handleOrderSizingChange}
-      />
+      {tab === "dashboard" ? (
+        <>
+          <SystemStatusPanel
+            dashboard={dashboard}
+            loading={loadingDashboard}
+            onPollingChange={handlePollingChange}
+            onKillSwitchChange={handleKillSwitchChange}
+            onOrderSizingChange={handleOrderSizingChange}
+          />
 
-      <h2 style={{ margin: "0 0 1rem", fontSize: 18, fontWeight: 500 }}>Closed trades</h2>
-      <TradeResultsDashboard trades={trades} loading={loadingTrades} />
+          <h2 style={{ margin: "0 0 1rem", fontSize: 18, fontWeight: 500 }}>Closed trades</h2>
+          <TradeResultsDashboard trades={trades} loading={loadingTrades} />
+        </>
+      ) : (
+        <ProgressPanel data={progress} loading={loadingProgress} />
+      )}
     </div>
   );
 }
