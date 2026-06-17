@@ -141,10 +141,27 @@ def is_watcher_online(status: dict[str, Any] | None, now: datetime | None = None
 
 
 def symbol_last_bar_at(status: dict[str, Any] | None, symbol: str) -> datetime | None:
+    """Last completed 1m bar open time (display only — not used for feed staleness)."""
     if not status:
         return None
     raw = (status.get("symbol_last_bar") or {}).get(symbol.upper())
     return _parse_iso(raw if isinstance(raw, str) else None)
+
+
+def symbol_last_feed_at(status: dict[str, Any] | None, symbol: str) -> datetime | None:
+    """
+    Wall-clock time the worker last processed a bar for this symbol.
+    Prefer symbol_last_feed_at over symbol_last_bar (bar open times go stale on 5m/15m/1h).
+    """
+    if not status:
+        return None
+    sym = symbol.upper()
+    raw = (status.get("symbol_last_feed_at") or {}).get(sym)
+    if isinstance(raw, str):
+        parsed = _parse_iso(raw)
+        if parsed is not None:
+            return parsed
+    return symbol_last_bar_at(status, symbol)
 
 
 def compute_feed_status(
@@ -167,7 +184,7 @@ def compute_feed_status(
         return "offline"
 
     now = now or datetime.now(timezone.utc)
-    last = symbol_last_bar_at(watcher_status, symbol)
+    last = symbol_last_feed_at(watcher_status, symbol)
     if last is not None:
         age = (now - last).total_seconds()
         if age <= symbol_feed_stale_seconds():

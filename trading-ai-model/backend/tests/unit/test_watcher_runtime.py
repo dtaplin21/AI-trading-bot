@@ -37,12 +37,31 @@ def test_is_watcher_offline_when_not_running():
 def test_compute_feed_status_feeding():
     now = datetime.now(timezone.utc)
     status = {
-        "symbol_last_bar": {"BTCUSD": (now - timedelta(seconds=30)).isoformat()},
+        "symbol_last_feed_at": {"BTCUSD": (now - timedelta(seconds=30)).isoformat()},
     }
     assert (
         watcher_runtime.compute_feed_status(
             watcher_online=True,
             symbol="BTCUSD",
+            session_open=True,
+            watcher_status=status,
+            now=now,
+        )
+        == "feeding"
+    )
+
+
+def test_compute_feed_status_feeding_prefers_feed_at_over_stale_bar_open():
+    """5m bar open time can be minutes old; wall-clock feed_at must win."""
+    now = datetime.now(timezone.utc)
+    status = {
+        "symbol_last_feed_at": {"MES": (now - timedelta(seconds=45)).isoformat()},
+        "symbol_last_bar": {"MES": (now - timedelta(minutes=5)).isoformat()},
+    }
+    assert (
+        watcher_runtime.compute_feed_status(
+            watcher_online=True,
+            symbol="MES",
             session_open=True,
             watcher_status=status,
             now=now,

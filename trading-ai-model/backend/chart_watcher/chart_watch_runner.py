@@ -148,6 +148,7 @@ class ChartWatchRunner:
         self._tick_loaders: list = []
         self._tick_aggregator = None
         self._symbol_last_bar: dict[str, str] = {}
+        self._symbol_last_feed_at: dict[str, str] = {}
         self._last_heartbeat_write: float = 0.0
 
         logger.info(
@@ -645,55 +646,64 @@ class ChartWatchRunner:
 
         self._persist_bar(bar)
 
-        sup = self._supervisors.get(bar.symbol)
+        sym = bar.symbol.upper()
         asm = self._assembler.get(bar.symbol)
-        if not sup or not asm:
-            logger.warning("ChartWatchRunner: no supervisor for %s", bar.symbol)
-            return
+        sup = self._supervisors.get(bar.symbol)
 
-        history = asm.get_history(bar.timeframe)
-        ohlcv = self._history_to_dataframe(history)
+        ohlcv_1m = None
+        if asm:
+            history_1m = asm.get_history("1m")
+            if history_1m:
+                ohlcv_1m = self._history_to_dataframe(history_1m)
 
-        if len(ohlcv) >= MIN_OHLCV_BARS:
+        if ohlcv_1m is not None and len(ohlcv_1m) >= MIN_OHLCV_BARS:
             try:
                 from config.symbols import get_symbol_or_none
                 from ml.features.level_intelligence import get_system
 
                 spec = get_symbol_or_none(bar.symbol)
                 asset_class = spec.asset_class if spec else "equity"
-                get_system(bar.symbol, asset_class).process_bar(ohlcv)
+                get_system(bar.symbol, asset_class).process_bar(ohlcv_1m)
             except Exception as exc:
                 logger.debug("LevelIntelligence process_bar [%s]: %s", bar.symbol, exc)
 
-        try:
-            result = await sup.on_new_bar(bar, ohlcv=ohlcv if len(ohlcv) >= MIN_OHLCV_BARS else None)
-            if result.errors:
+        if bar.timeframe == "1m" and sup:
+            try:
+                pipeline_ohlcv = (
+                    ohlcv_1m if ohlcv_1m is not None and len(ohlcv_1m) >= MIN_OHLCV_BARS else None
+                )
+                result = await sup.on_new_bar(bar, ohlcv=pipeline_ohlcv)
+                if result.errors:
+                    logger.error(
+                        "Pipeline error [%s %s]: %s",
+                        bar.symbol,
+                        bar.timeframe,
+                        result.errors[0],
+                    )
+                elif result.executed:
+                    logger.info(
+                        "TRADE EXECUTED [%s %s]: rank=%d approved=%s",
+                        bar.symbol,
+                        bar.timeframe,
+                        result.fused.signal_rank if result.fused else 0,
+                        result.risk.approved if result.risk else False,
+                    )
+            except Exception as e:
                 logger.error(
-                    "Pipeline error [%s %s]: %s",
+                    "ChartWatchRunner: pipeline exception [%s]: %s",
                     bar.symbol,
-                    bar.timeframe,
-                    result.errors[0],
+                    e,
+                    exc_info=True,
                 )
-            elif result.executed:
-                logger.info(
-                    "TRADE EXECUTED [%s %s]: rank=%d approved=%s",
-                    bar.symbol,
-                    bar.timeframe,
-                    result.fused.signal_rank if result.fused else 0,
-                    result.risk.approved if result.risk else False,
-                )
-        except Exception as e:
-            logger.error(
-                "ChartWatchRunner: pipeline exception [%s]: %s",
-                bar.symbol,
-                e,
-                exc_info=True,
-            )
+        elif not sup or not asm:
+            logger.warning("ChartWatchRunner: no supervisor/assembler for %s", bar.symbol)
 
-        ts = bar.timestamp
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
-        self._symbol_last_bar[bar.symbol.upper()] = ts.isoformat()
+        self._symbol_last_feed_at[sym] = datetime.now(tz=timezone.utc).isoformat()
+        if bar.timeframe == "1m":
+            ts = bar.timestamp
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            self._symbol_last_bar[sym] = ts.isoformat()
         self._publish_watcher_status()
 
     def _publish_watcher_status(
@@ -720,6 +730,7 @@ class ChartWatchRunner:
                 "timeframes": list(TIMEFRAMES),
                 "bars_processed": dict(self._bars_processed),
                 "symbol_last_bar": dict(self._symbol_last_bar),
+                "symbol_last_feed_at": dict(self._symbol_last_feed_at),
                 "kill_switch": is_kill_switch_active(),
             }
         )
