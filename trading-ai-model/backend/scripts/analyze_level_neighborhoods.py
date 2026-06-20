@@ -15,11 +15,16 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-from dataclasses import dataclass, asdict
+import sys
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
-import psycopg2
 import psycopg2.extras
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from config.settings import get_settings
+from data.storage.pg_connect import connect_psycopg2, is_database_url_placeholder
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("level_neighborhoods")
@@ -46,9 +51,15 @@ class NeighborhoodProfile:
     either_neighbors_avg_hold_rate: float
 
 
+def _database_url() -> str:
+    url = (get_settings().database_url or os.getenv("DATABASE_URL", "")).strip()
+    if not url or is_database_url_placeholder(url):
+        raise RuntimeError("DATABASE_URL is not configured")
+    return url
+
+
 def _get_conn():
-    dsn = os.environ["DATABASE_URL"]
-    return psycopg2.connect(dsn)
+    return connect_psycopg2(_database_url())
 
 
 def load_levels(symbol: str, min_touches: int) -> list[dict]:
