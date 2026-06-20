@@ -26,6 +26,11 @@ def _remote_ssl_host(database_url: str) -> bool:
     return True
 
 
+def _ssl_disable_requested() -> bool:
+    """True when env asks to skip SSL — only honored for local Postgres."""
+    return os.getenv("DATABASE_SSL_DISABLE", "").lower() in ("true", "1", "yes")
+
+
 def _ssl_mode_from_env() -> str:
     """PGSSLMODE (libpq) or DATABASE_SSL_MODE override; default require for remote."""
     return (
@@ -63,8 +68,6 @@ def normalize_database_url(database_url: str) -> str:
     qs = parse_qs(parsed.query)
     if "sslmode" not in qs:
         mode = _ssl_mode_from_env()
-        if os.getenv("DATABASE_SSL_DISABLE", "").lower() in ("true", "1", "yes"):
-            mode = "disable"
         qs["sslmode"] = [mode]
         query = urlencode({k: v[0] for k, v in qs.items()})
         return urlunparse(parsed._replace(query=query))
@@ -79,15 +82,13 @@ def psycopg2_connect_kwargs(database_url: str) -> dict[str, Any]:
       PGCONNECT_TIMEOUT / DATABASE_CONNECT_TIMEOUT — connect_timeout seconds (default 30)
       PGSSLMODE / DATABASE_SSL_MODE — sslmode (default require for remote)
       DATABASE_SSL_ROOTCERT       — path to CA bundle (default: certifi for remote)
-      DATABASE_SSL_DISABLE        — if true, sslmode=disable (local docker / Render internal)
+      DATABASE_SSL_DISABLE        — if true, sslmode=disable for localhost only
     """
     kwargs: dict[str, Any] = {"connect_timeout": _connect_timeout_seconds()}
 
-    if os.getenv("DATABASE_SSL_DISABLE", "").lower() in ("true", "1", "yes"):
-        kwargs["sslmode"] = "disable"
-        return kwargs
-
     if not _remote_ssl_host(database_url):
+        if _ssl_disable_requested():
+            kwargs["sslmode"] = "disable"
         return kwargs
 
     sslmode = _ssl_mode_from_env()
@@ -153,7 +154,10 @@ def connect_psycopg2(database_url: str):
             import certifi
 
             retry_kwargs = dict(kwargs)
-            retry_kwargs["sslmode"] = kwargs.get("sslmode", "require")
+            if "ssl/tls required" in err or kwargs.get("sslmode") == "disable":
+                retry_kwargs["sslmode"] = "require"
+            else:
+                retry_kwargs["sslmode"] = kwargs.get("sslmode", "require")
             retry_kwargs["sslrootcert"] = certifi.where()
             logger.warning("Postgres SSL retry with certifi CA bundle")
             return psycopg2.connect(url, **retry_kwargs)

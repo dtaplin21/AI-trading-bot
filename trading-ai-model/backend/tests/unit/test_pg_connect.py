@@ -31,6 +31,25 @@ def test_render_host_gets_sslrootcert():
     assert rootcert and Path(rootcert).is_file()
 
 
+def test_ssl_disable_ignored_for_remote_render():
+    url = "postgresql://u:p@dpg-abc.oregon-postgres.render.com:5432/db"
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setenv("DATABASE_SSL_DISABLE", "true")
+    try:
+        kwargs = psycopg2_connect_kwargs(url)
+        assert kwargs.get("sslmode") == "require"
+        assert kwargs.get("sslrootcert")
+    finally:
+        monkeypatch.undo()
+
+
+def test_ssl_disable_applies_to_localhost(monkeypatch):
+    monkeypatch.setenv("DATABASE_SSL_DISABLE", "true")
+    url = "postgresql://u:p@localhost:5432/db"
+    kwargs = psycopg2_connect_kwargs(url)
+    assert kwargs.get("sslmode") == "disable"
+
+
 def test_rejects_render_placeholder_url():
     with pytest.raises(ValueError, match="placeholder"):
         _validate_database_url("postgresql://trading:<paste External URL>@host/db")
