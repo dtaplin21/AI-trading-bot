@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from api.services.level_progress import (
+    _database_url,
     gate_thresholds,
     load_all_level_rows,
     load_recent_touches,
@@ -21,18 +22,11 @@ from api.services.level_progress import (
     score_row,
 )
 from config.symbols import DEFAULT_WATCHER_SYMBOLS
-from data.storage.pg_connect import connect_psycopg2, is_database_url_placeholder
+from data.storage.pg_connect import connect_psycopg2
 
 logger = logging.getLogger(__name__)
 
 PROGRESS_SYMBOLS = list(DEFAULT_WATCHER_SYMBOLS)
-
-
-def _database_url() -> str | None:
-    url = os.getenv("DATABASE_URL", "").strip()
-    if not url or is_database_url_placeholder(url):
-        return None
-    return url
 
 
 def _get_last_price(symbol: str) -> Optional[float]:
@@ -68,6 +62,11 @@ def _get_last_price(symbol: str) -> Optional[float]:
 def build_progress_payload() -> dict:
     thresholds = gate_thresholds()
     at_line, qualified, building = [], [], []
+
+    if not _database_url():
+        logger.warning(
+            "progress: DATABASE_URL not configured — returning empty progress buckets"
+        )
 
     for symbol in PROGRESS_SYMBOLS:
         current_price = _get_last_price(symbol)

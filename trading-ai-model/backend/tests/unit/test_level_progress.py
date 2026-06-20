@@ -91,3 +91,12 @@ def test_gate_thresholds_not_hardcoded():
     assert t.min_touches >= 1
     assert 0 < t.min_hold_rate < 1
     assert t.tolerance_pct > 0
+
+
+def test_database_url_falls_back_to_settings(monkeypatch):
+    from api.services import level_progress
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    fake_settings = type("S", (), {"database_url": "postgresql://u:p@localhost:5432/db"})()
+    monkeypatch.setattr(level_progress, "get_settings", lambda: fake_settings)
+    assert level_progress._database_url() == "postgresql://u:p@localhost:5432/db"

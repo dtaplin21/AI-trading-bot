@@ -52,6 +52,7 @@ from config.watchlist import (
     watcher_symbols_from_env,
 )
 from config.symbols import SYMBOL_MAP
+from data.storage.pg_connect import is_database_url_placeholder
 from data.storage.timescale_store import TimescaleStore
 from paper_trading.position_book import get_position_book
 
@@ -60,13 +61,21 @@ logger = logging.getLogger(__name__)
 _db_store: Optional[TimescaleStore] = None
 
 
+def _database_url() -> str | None:
+    url = (get_settings().database_url or os.getenv("DATABASE_URL", "")).strip()
+    if not url or is_database_url_placeholder(url):
+        return None
+    return url
+
+
 def _get_db() -> Optional[TimescaleStore]:
     global _db_store
     if _db_store is not None:
         return _db_store if _db_store.available else None
     try:
-        if os.getenv("DATABASE_URL"):
-            _db_store = TimescaleStore()
+        url = _database_url()
+        if url:
+            _db_store = TimescaleStore(database_url=url)
         return _db_store if _db_store and _db_store.available else None
     except Exception as exc:
         logger.debug("dashboard_service: DB unavailable: %s", exc)

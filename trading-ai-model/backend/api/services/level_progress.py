@@ -12,6 +12,7 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
+from config.settings import get_settings
 from data.storage.pg_connect import connect_psycopg2, is_database_url_placeholder
 from pipeline.level_entry_gate import LevelEntryGate, is_actionable_watchlist_row
 
@@ -114,7 +115,7 @@ def score_row(
 
 
 def _database_url() -> str | None:
-    url = os.getenv("DATABASE_URL", "").strip()
+    url = (get_settings().database_url or os.getenv("DATABASE_URL", "")).strip()
     if not url or is_database_url_placeholder(url):
         return None
     return url
