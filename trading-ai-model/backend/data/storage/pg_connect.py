@@ -1,26 +1,47 @@
 """
 Shared psycopg2 connection helpers for Render / remote Postgres.
 
-Fixes macOS "SSL error: certificate verify failed" when DATABASE_URL uses sslmode=require
-by supplying sslrootcert from certifi (Mozilla CA bundle).
+SSL behavior:
+  - localhost: optional disable via DATABASE_SSL_DISABLE
+  - Render internal (dpg-*-a): sslmode=prefer, no CA bundle (private network cert)
+  - Render external / other remote: sslmode=require + certifi CA bundle
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 logger = logging.getLogger(__name__)
 
+_RENDER_INTERNAL_HOST = re.compile(r"^dpg-[a-z0-9]+-a$", re.IGNORECASE)
+
+
+def _hostname(database_url: str) -> str:
+    try:
+        return (urlparse(database_url).hostname or "").lower()
+    except Exception:
+        return ""
+
+
+def _is_render_internal_host(host: str) -> bool:
+    """
+    Render Internal Database URL host (private network), e.g. dpg-d8ed4h4m0tmc73eof7a0-a.
+
+    External URLs use the full domain (*.oregon-postgres.render.com) and need certifi.
+    """
+    h = (host or "").lower()
+    if not h or ".render.com" in h:
+        return False
+    return bool(_RENDER_INTERNAL_HOST.match(h))
+
 
 def _remote_ssl_host(database_url: str) -> bool:
     """True when connecting to a hosted Postgres (not localhost)."""
-    try:
-        host = (urlparse(database_url).hostname or "").lower()
-    except Exception:
-        return False
+    host = _hostname(database_url)
     if not host or host in ("localhost", "127.0.0.1", "::1"):
         return False
     return True
@@ -31,13 +52,15 @@ def _ssl_disable_requested() -> bool:
     return os.getenv("DATABASE_SSL_DISABLE", "").lower() in ("true", "1", "yes")
 
 
-def _ssl_mode_from_env() -> str:
-    """PGSSLMODE (libpq) or DATABASE_SSL_MODE override; default require for remote."""
-    return (
+def _ssl_mode_from_env(*, internal: bool = False) -> str:
+    """PGSSLMODE / DATABASE_SSL_MODE override; sensible default per host type."""
+    override = (
         os.getenv("PGSSLMODE", "").strip()
         or os.getenv("DATABASE_SSL_MODE", "").strip()
-        or "require"
     )
+    if override:
+        return override
+    return "prefer" if internal else "require"
 
 
 def _connect_timeout_seconds() -> int:
@@ -64,10 +87,11 @@ def normalize_database_url(database_url: str) -> str:
     if not _remote_ssl_host(database_url):
         return database_url
 
+    host = _hostname(database_url)
     parsed = urlparse(database_url)
     qs = parse_qs(parsed.query)
     if "sslmode" not in qs:
-        mode = _ssl_mode_from_env()
+        mode = _ssl_mode_from_env(internal=_is_render_internal_host(host))
         qs["sslmode"] = [mode]
         query = urlencode({k: v[0] for k, v in qs.items()})
         return urlunparse(parsed._replace(query=query))
@@ -80,8 +104,8 @@ def psycopg2_connect_kwargs(database_url: str) -> dict[str, Any]:
 
     Env:
       PGCONNECT_TIMEOUT / DATABASE_CONNECT_TIMEOUT — connect_timeout seconds (default 30)
-      PGSSLMODE / DATABASE_SSL_MODE — sslmode (default require for remote)
-      DATABASE_SSL_ROOTCERT       — path to CA bundle (default: certifi for remote)
+      PGSSLMODE / DATABASE_SSL_MODE — sslmode override
+      DATABASE_SSL_ROOTCERT       — path to CA bundle (external remote only)
       DATABASE_SSL_DISABLE        — if true, sslmode=disable for localhost only
     """
     kwargs: dict[str, Any] = {"connect_timeout": _connect_timeout_seconds()}
@@ -91,9 +115,16 @@ def psycopg2_connect_kwargs(database_url: str) -> dict[str, Any]:
             kwargs["sslmode"] = "disable"
         return kwargs
 
-    sslmode = _ssl_mode_from_env()
+    host = _hostname(database_url)
+    internal = _is_render_internal_host(host)
+    sslmode = _ssl_mode_from_env(internal=internal)
     if sslmode.lower() == "disable":
         kwargs["sslmode"] = "disable"
+        return kwargs
+
+    if internal:
+        # Render private-network Postgres — do not verify against public CA bundle.
+        kwargs["sslmode"] = sslmode
         return kwargs
 
     rootcert = os.getenv("DATABASE_SSL_ROOTCERT", "").strip()
@@ -149,7 +180,23 @@ def connect_psycopg2(database_url: str):
         err = str(exc).lower()
         if "ssl" not in err and "certificate" not in err:
             raise
-        # Retry once with explicit certifi bundle (macOS / some Render external URLs)
+
+        host = _hostname(url)
+        if _is_render_internal_host(host):
+            # Internal URL + cert verify failure: retry without sslrootcert, then disable.
+            for mode in ("prefer", "disable"):
+                try:
+                    retry_kwargs = {
+                        "connect_timeout": kwargs.get("connect_timeout", 30),
+                        "sslmode": mode,
+                    }
+                    logger.warning("Postgres internal Render retry sslmode=%s", mode)
+                    return psycopg2.connect(url, **retry_kwargs)
+                except OperationalError:
+                    continue
+            raise exc from None
+
+        # External / macOS: retry once with explicit certifi bundle
         try:
             import certifi
 
