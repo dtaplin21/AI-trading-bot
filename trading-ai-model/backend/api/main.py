@@ -2,9 +2,13 @@
 
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 from agents.news_runtime import start_news_background
 from api.routes import backtest, dashboard, health, market_state, models, news, progress, risk, signals, trades

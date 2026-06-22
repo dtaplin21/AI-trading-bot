@@ -38,25 +38,32 @@ def _get_last_price(symbol: str) -> Optional[float]:
     if not url:
         return None
 
-    timeframe = os.getenv("WATCHLIST_PRIMARY_TF", "5m")
-    try:
-        conn = connect_psycopg2(url)
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT close FROM ohlcv_candles
-            WHERE symbol = %s AND timeframe = %s
-            ORDER BY time DESC LIMIT 1
-            """,
-            (symbol.upper(), timeframe),
-        )
-        row = cur.fetchone()
-        cur.close()
-        conn.close()
-        return float(row[0]) if row else None
-    except Exception as exc:
-        logger.debug("_get_last_price failed for %s: %s", symbol, exc)
-        return None
+    primary = os.getenv("WATCHLIST_PRIMARY_TF", "5m")
+    timeframes = [primary, "1m", "5m", "15m", "1h"]
+    seen: set[str] = set()
+    for timeframe in timeframes:
+        if not timeframe or timeframe in seen:
+            continue
+        seen.add(timeframe)
+        try:
+            conn = connect_psycopg2(url)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT close FROM ohlcv_candles
+                WHERE symbol = %s AND timeframe = %s
+                ORDER BY time DESC LIMIT 1
+                """,
+                (symbol.upper(), timeframe),
+            )
+            row = cur.fetchone()
+            cur.close()
+            conn.close()
+            if row:
+                return float(row[0])
+        except Exception as exc:
+            logger.debug("_get_last_price failed for %s %s: %s", symbol, timeframe, exc)
+    return None
 
 
 def build_progress_payload() -> dict:

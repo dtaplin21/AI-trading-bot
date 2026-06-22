@@ -42,6 +42,7 @@ from chart_watcher.watcher_runtime import (
     compute_feed_status,
     is_watcher_online,
     read_watcher_status,
+    symbol_feed_stale_seconds,
 )
 from config.settings import get_settings
 from config.watchlist import (
@@ -80,6 +81,61 @@ def _get_db() -> Optional[TimescaleStore]:
     except Exception as exc:
         logger.debug("dashboard_service: DB unavailable: %s", exc)
         return None
+
+
+def _parse_bar_at(iso: str | None) -> datetime | None:
+    if not iso:
+        return None
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except ValueError:
+        return None
+
+
+def _feed_status_with_db_fallback(
+    chart: WatchedChart,
+    *,
+    watcher_online: bool,
+    watcher_status: dict[str, Any] | None,
+) -> str:
+    """
+    Worker heartbeat drives live feed status; fall back to DB bar age when worker is offline
+    so seeded/historical bars do not show as fully Offline with no last bar.
+    """
+    status = compute_feed_status(
+        watcher_online=watcher_online,
+        symbol=chart.symbol.upper(),
+        session_open=chart.session_open,
+        watcher_status=watcher_status,
+    )
+    if status != "offline":
+        return status
+
+    last = _parse_bar_at(chart.last_bar_at)
+    if last is None:
+        return "offline"
+
+    age = (datetime.now(timezone.utc) - last).total_seconds()
+    if age <= symbol_feed_stale_seconds():
+        return "stale"
+    if not chart.session_open:
+        return "session_closed"
+    return "stale"
+
+
+def _ohlcv_timeframes_for_chart(chart: WatchedChart) -> list[str]:
+    """Prefer chart timeframe, then 1m (backfill often writes 1m only)."""
+    candidates = [chart.timeframe, "1m", "5m", "15m", "1h"]
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for tf in candidates:
+        if tf and tf not in seen:
+            seen.add(tf)
+            ordered.append(tf)
+    return ordered
 
 
 def build_watched_charts() -> list[WatchedChart]:
@@ -122,10 +178,9 @@ def _enrich_from_watcher_runtime(charts: list[WatchedChart]) -> list[WatchedChar
 
     for chart in charts:
         sym = chart.symbol.upper()
-        chart.feed_status = compute_feed_status(
+        chart.feed_status = _feed_status_with_db_fallback(
+            chart,
             watcher_online=watcher_online,
-            symbol=sym,
-            session_open=chart.session_open,
             watcher_status=watcher_status,
         )
         chart.pipeline_running = watcher_online and chart.feed_status == "feeding"
@@ -140,23 +195,26 @@ def _enrich_from_watcher_runtime(charts: list[WatchedChart]) -> list[WatchedChar
 def _enrich_from_db(charts: list[WatchedChart], db: TimescaleStore) -> list[WatchedChart]:
     """Attach latest price and bar count from TimescaleDB."""
     for chart in charts:
-        try:
-            df = db.load_ohlcv(chart.symbol, chart.timeframe, limit=1)
-            if df is not None and not df.empty:
+        for tf in _ohlcv_timeframes_for_chart(chart):
+            try:
+                df = db.load_ohlcv(chart.symbol, tf, limit=1)
+                if df is None or df.empty:
+                    continue
                 last_bar = cast(pd.Timestamp, df.index[-1]).to_pydatetime()
                 if last_bar.tzinfo is None:
                     last_bar = last_bar.replace(tzinfo=timezone.utc)
                 chart.last_price = float(df["close"].iloc[-1])
                 chart.last_bar_at = last_bar.isoformat()
-                chart.bar_count = db.count_bars(chart.symbol, chart.timeframe)
+                chart.bar_count = db.count_bars(chart.symbol, tf)
                 chart.is_active = True
-        except Exception as exc:
-            logger.debug(
-                "dashboard_service: DB enrich failed for %s %s: %s",
-                chart.symbol,
-                chart.timeframe,
-                exc,
-            )
+                break
+            except Exception as exc:
+                logger.debug(
+                    "dashboard_service: DB enrich failed for %s %s: %s",
+                    chart.symbol,
+                    tf,
+                    exc,
+                )
     return charts
 
 
@@ -178,6 +236,7 @@ def build_system_status() -> dict[str, Any]:
         "watcher_mode": os.getenv("WATCHER_MODE", "paper"),
         "auto_promote": os.getenv("MODEL_AUTO_PROMOTE", "false"),
         "db_connected": _get_db() is not None,
+        "database_url_configured": _database_url() is not None,
         "anthropic_key": bool(os.getenv("ANTHROPIC_API_KEY")),
         "massive_key": bool(os.getenv("POLYGON_API_KEY")),
         "news_enabled": bool(
