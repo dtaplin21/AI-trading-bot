@@ -26,8 +26,8 @@ The watcher is **touch-driven**, not **discovery-driven**. Rolling swing discove
 - **Rolling window** — how much history each discovery pass considers (e.g. last **60 calendar days** of 1m bars). Old structure outside the window can be retired.
 - **Discovery trigger** — *when* a full discovery pass runs. **Primary (v1): event-driven on every bar.** **Secondary: hourly safety net.**
 - **Merge policy** — how newly discovered clusters update `price_levels` without wiping live touch history.
-- **Regime shift** — price has moved so far from the existing level set that incremental merge + a few deactivations is insufficient; the symbol needs **wholesale re-discovery** across the new trading range (typical after 20–40% moves on BTC, SOLUSD, ES, or multi-session gaps on MES).
-- **Drift deactivation** — a **small number** of levels aged out of relevance (e.g. >3% from last close, no touches in window) while price still trades near the bulk of the level book. Low blast radius; selective `is_active = FALSE`.
+- **Regime shift** — price has moved so far from the existing level set that incremental merge + archiving a few outliers is insufficient; the symbol needs **wholesale re-discovery** across the new trading range (typical after 20–40% moves on BTC, SOLUSD, ES, or multi-session gaps on MES).
+- **Drift archive** — a **small number** of levels aged out of relevance (e.g. >3% from last close, no touches in window) while price still trades near the bulk of the level book. Low blast radius; copy to `price_levels_archive`, set live `is_active = FALSE`.
 
 **Stale cutoff (3%) applies to drift only.** It must be paired with regime-shift detection — not used alone to “clean up” after a large gap.
 
@@ -50,7 +50,7 @@ On each 1m bar (in the watcher, before enqueueing a heavy discovery job):
 ```sql
 SELECT MIN(level_price), MAX(level_price)
 FROM price_levels
-WHERE symbol = %s;
+WHERE symbol = %s AND is_active = TRUE;
 ```
 
 Compare bar close to `[min, max]` with a small buffer (e.g. `cluster_pct` or `LEVEL_DISCOVERY_RANGE_BUFFER_PCT`):
@@ -75,13 +75,13 @@ When the envelope check fires, compute **gap severity** before choosing merge st
 
 | Case | Condition | Work profile | Risk |
 |------|-----------|--------------|------|
-| **Minor escape** | Gap pct > buffer but `< LEVEL_DISCOVERY_REGIME_GAP_PCT` (default **8%**) | Incremental merge: add clusters in new zone, **drift-deactivate** outliers (>3% from close, no window touches) | Low — preserves most touch history |
-| **Regime shift** | Gap pct `>= LEVEL_DISCOVERY_REGIME_GAP_PCT` **OR** >50% of active watchlist levels are >3% from close with zero window touches | **Wholesale re-discovery**: full swing scan on rolling window, bulk deactivate all levels outside new `[discovered_min, discovered_max]` band, merge fresh clusters across entire new range, **full-symbol exit recompute** | High — many rows change; gate may briefly have fewer actionable levels until exit optimizer catches up |
+| **Minor escape** | Gap pct > buffer but `< LEVEL_DISCOVERY_REGIME_GAP_PCT` (default **8%**) | Incremental merge: add clusters in new zone, **drift-archive** outliers (>3% from close, no window touches) | Low — preserves touch history in archive |
+| **Regime shift** | Gap pct `>= LEVEL_DISCOVERY_REGIME_GAP_PCT` **OR** >50% of active watchlist levels are >3% from close with zero window touches | **Wholesale re-discovery**: full swing scan, bulk **archive** of levels outside new band, merge fresh clusters, **full-symbol exit recompute** | High — many rows archived; gate may lag until exit optimizer catches up |
 
 Examples:
 
-- **MES ~4% above envelope** (7294 → 7600): minor escape path — incremental merge + selective deactivation.
-- **BTC/SOL/ES 20–40% move**: regime shift — do **not** rely on 3% drift deactivation alone; deactivate the old book in bulk and populate levels across the new range.
+- **MES ~4% above envelope** (7294 → 7600): minor escape path — incremental merge + selective archive.
+- **BTC/SOL/ES 20–40% move**: regime shift — do **not** rely on 3% drift archive alone; archive the old book in bulk and populate levels across the new range.
 
 The event trigger and merge path share one detection step: `classify_discovery_mode(symbol, close, envelope) -> 'drift' | 'regime_shift'`.
 
@@ -94,7 +94,7 @@ Recommended defaults for v1:
 | **Fallback interval** | **3600s (hourly)** | Not daily |
 | **Post-trigger cooldown** | **300s (5 min)** | Applies **after** a completed run; does not block coalesced pending reruns (see concurrency) |
 | Bar source | `ohlcv_candles` 1m, resample to 5m for swings | Matches seed + exit optimizer |
-| **Drift deactivation** | Level > **3%** from last close AND no touch in window | **Drift path only** — selective retire |
+| **Drift archive** | Level > **3%** from last close AND no touch in window | **Drift path only** — move to `price_levels_archive` |
 | **Regime gap threshold** | **8%** envelope escape (`LEVEL_DISCOVERY_REGIME_GAP_PCT`) | Switches to wholesale re-discovery |
 | Min touches to stay active | 5 | Align with gate / watchlist thresholds |
 
@@ -254,8 +254,8 @@ If the in-flight run **errors** (DB timeout, etc.):
 ### Phase 0 — Design validation (no behavior change)
 
 - Document env vars and merge rules (this file).
-- Add SQL migration sketch for audit table + optional columns.
-- Unit-test fixtures for merge/stale logic before wiring the watcher.
+- Apply migration `008_level_discovery.sql` (+ extension columns for scheduler/regime).
+- Unit-test fixtures for merge/archive logic before wiring the watcher.
 
 ### Phase 1 — Core discovery service (offline script first)
 
@@ -270,15 +270,16 @@ Responsibilities:
 - `is_outside_envelope(close, min, max, buffer_pct) -> bool` — pure function for tests.
 - `classify_discovery_mode(symbol, close, envelope) -> 'drift' | 'regime_shift'` — gap pct + watchlist staleness heuristics.
 - `discover_levels(symbol, df)` — wrap `LevelHistoryTracker.fit()` or share clustering with `seed_level_intelligence.cluster_and_upsert`.
-- `merge_into_price_levels(symbol, discovered, *, mode)` — **drift**: upsert new clusters; preserve stats on matches. **regime_shift**: same upsert plus bulk deactivate levels outside discovered band.
-- `deactivate_drift_levels(symbol, last_close, window_end)` — selective 3% + no-touch-in-window retire (**drift path only**).
-- `deactivate_regime_book(symbol, discovered_min, discovered_max, buffer_pct)` — bulk deactivate watchlist/levels outside new trading band (**regime path**).
+- `merge_into_price_levels(symbol, discovered, *, mode)` — **drift**: upsert new clusters; preserve stats on matches. **regime_shift**: upsert plus bulk archive of levels outside discovered band.
+- `archive_drift_levels(symbol, last_close, window_end)` — selective 3% + no-touch-in-window → move to `price_levels_archive` (**drift path only**).
+- `archive_regime_book(symbol, discovered_min, discovered_max, buffer_pct)` — bulk archive + `level_watchlist.is_active = FALSE` outside new band (**regime path**).
+- `reactivate_level(symbol, level_price)` — if archived level falls back inside discovered band on merge match → copy back to live, increment `levels_reactivated`.
 - `sync_watchlist_from_levels(symbol)` — same SQL rules as seed + `_refresh_watchlist_entry` thresholds.
-- `run_discovery(symbol, *, trigger, mode)` — orchestrates full pass; logs `merge_mode` to audit table.
+- `run_discovery(symbol, *, trigger, mode)` — orchestrates full pass; writes `level_discovery_runs` row (or row with `skipped_reason` if preconditions fail).
 
 **New script:** `scripts/run_rolling_discovery.py`
 
-- CLI mirror of seed/exit scripts: `--symbols`, `--days`, `--dry-run`, `--deactivate-stale`.
+- CLI mirror of seed/exit scripts: `--symbols`, `--days`, `--dry-run`, `--archive-stale`.
 - Safe to run manually before wiring the watcher.
 
 **Deliverable:** Operator can run manually or on an hourly cron without redeploying the watcher.
@@ -310,7 +311,7 @@ Responsibilities:
   - **Single-flight per symbol** with **coalesce-one pending rerun** (see Concurrency section — not silent skip, not kill-and-restart).
   - **Global cap** `LEVEL_DISCOVERY_MAX_CONCURRENT` (default 4) across symbols.
   - **Cooldown** after completed runs only; pending reruns exempt.
-- Log summary to `level_discovery_runs` including `trigger_reason`, **`merge_mode`**, and **`runs_coalesced`** (count of triggers merged during that run).
+- Log every attempt to `level_discovery_runs`: success rows populate counts; skipped runs set `skipped_reason` (e.g. `cooldown`, `insufficient_bars`, `already_running`); completed rows include **`runs_coalesced`**. Application layer also sets **`trigger_reason`**, **`merge_mode`**, **`regime_gap_pct`**, **`envelope_min/max`** (see migration extension below).
 
 **New:** `chart_watcher/level_discovery_scheduler.py`
 
@@ -328,7 +329,7 @@ Responsibilities:
 
 **Extend:** `api/services/level_progress.py` / `progress_service.py`
 
-- Surface discovery metadata: last run time, **trigger reason**, **`merge_mode`**, levels added/deactivated, nearest level distance, **envelope vs close**, **regime gap pct**.
+- Surface discovery metadata: last run time, **trigger reason**, **`merge_mode`**, `levels_archived` / `levels_reactivated`, nearest level distance, **envelope vs close**, **regime gap pct**, **`coverage_pct`**.
 - Helps explain “building” vs “stale seed” on the Progress tab.
 
 **Extend:** `trading_mcp/tools/levels.py`
@@ -347,42 +348,115 @@ Responsibilities:
 
 ---
 
-## Database changes (planned migration)
+## Database changes — `008_level_discovery.sql`
 
-**New file:** `backend/db/migrations/008_level_discovery.sql`
+**File:** `backend/db/migrations/008_level_discovery.sql` (checked in)
+
+### `price_levels_archive`
+
+Preserves retired levels — **never delete** touch history or level stats from the archive.
+
+| Column | Purpose |
+|--------|---------|
+| (same as `price_levels`) | Full row snapshot at archive time |
+| `archived_at` | When the row moved to archive |
+| `archive_reason` | e.g. `drift_stale`, `regime_shift`, `manual` |
+
+Archive flow: `INSERT INTO price_levels_archive … SELECT … FROM price_levels`; set live `price_levels.is_active = FALSE` and `level_watchlist.is_active = FALSE`. **`level_touches` rows stay linked by `(symbol, level_price)`** for audit.
+
+### `price_levels` (live) — new columns
+
+| Column | Default | Purpose |
+|--------|---------|---------|
+| `is_active` | `TRUE` | Live book vs archived; envelope query uses `WHERE is_active = TRUE` |
+| `discovery_source` | `'seed'` | `'seed' \| 'rolling' \| 'touch'` |
+| `last_discovery_at` | NULL | Updated on each merge affecting this row |
+
+### `level_discovery_runs` — audit every attempt
+
+One row per discovery **attempt** (success, skip, or error):
+
+| Column | Purpose |
+|--------|---------|
+| `window_days`, `bars_loaded`, `bars_expected`, `coverage_pct` | Data quality gate — skip or warn when `coverage_pct` too low |
+| `levels_found`, `levels_merged`, `levels_archived`, `levels_reactivated`, `watchlist_active` | Outcome counts |
+| `last_close` | Close at run start |
+| `skipped_reason` | Set when run did not execute merge (e.g. `cooldown`, `insufficient_bars`, `disabled`) |
+| `runs_coalesced` | Triggers merged while a prior run was in flight (see Concurrency) |
+| `error` | Failure message when merge threw |
+| `started_at`, `finished_at` | Timing |
+
+### Canonical migration (008)
 
 ```sql
--- Audit trail for rolling discovery runs
+-- db/migrations/008_level_discovery.sql
+--
+-- Adds archive table for old/inactive price levels (preserve, never delete)
+-- and an audit table for rolling discovery run history.
+
+CREATE TABLE IF NOT EXISTS price_levels_archive (
+    LIKE price_levels INCLUDING ALL
+);
+ALTER TABLE price_levels_archive ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE price_levels_archive ADD COLUMN IF NOT EXISTS archive_reason TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_price_levels_archive_symbol_price
+    ON price_levels_archive (symbol, level_price);
+
+ALTER TABLE price_levels ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
+ALTER TABLE price_levels ADD COLUMN IF NOT EXISTS discovery_source TEXT DEFAULT 'seed';
+ALTER TABLE price_levels ADD COLUMN IF NOT EXISTS last_discovery_at TIMESTAMPTZ;
+
 CREATE TABLE IF NOT EXISTS level_discovery_runs (
-    id              BIGSERIAL PRIMARY KEY,
-    symbol          TEXT NOT NULL,
-    trigger_reason  TEXT NOT NULL,  -- 'range_escape' | 'interval' | 'manual' | 'startup'
-    merge_mode      TEXT NOT NULL,  -- 'drift' | 'regime_shift'
-    regime_gap_pct  FLOAT,          -- envelope escape severity when range_escape
-    window_days     INT NOT NULL,
-    bars_loaded     INT NOT NULL,
-    levels_found    INT NOT NULL,
-    levels_merged   INT NOT NULL,
-    levels_deactivated INT NOT NULL,
-    watchlist_active INT NOT NULL,
-    last_close      FLOAT,
-    envelope_min    FLOAT,
-    envelope_max    FLOAT,
-    runs_coalesced    INT DEFAULT 0,  -- triggers merged while this run was in flight
-    started_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    finished_at     TIMESTAMPTZ,
-    error           TEXT
+    id                  BIGSERIAL PRIMARY KEY,
+    symbol              TEXT NOT NULL,
+    window_days         INT NOT NULL,
+    bars_loaded         INT NOT NULL,
+    bars_expected       INT NOT NULL,
+    coverage_pct        NUMERIC(5,2) NOT NULL,
+    levels_found        INT NOT NULL DEFAULT 0,
+    levels_merged       INT NOT NULL DEFAULT 0,
+    levels_archived     INT NOT NULL DEFAULT 0,
+    levels_reactivated  INT NOT NULL DEFAULT 0,
+    watchlist_active    INT NOT NULL DEFAULT 0,
+    last_close          DOUBLE PRECISION,
+    skipped_reason      TEXT,
+    runs_coalesced      INT NOT NULL DEFAULT 0,
+    started_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    finished_at         TIMESTAMPTZ,
+    error               TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_level_discovery_runs_symbol
+CREATE INDEX IF NOT EXISTS idx_discovery_runs_symbol
     ON level_discovery_runs (symbol, started_at DESC);
 ```
 
-**Optional columns on `price_levels` (v1.1):**
+### Extension columns (same migration or `008b` — scheduler / regime)
 
-- `discovery_source TEXT` — `'seed' | 'rolling' | 'touch'`
-- `last_discovery_at TIMESTAMPTZ`
-- `is_active BOOLEAN DEFAULT TRUE` — mirror watchlist lifecycle at level row
+The watcher scheduler and merge-mode logic still need these on `level_discovery_runs`:
+
+```sql
+ALTER TABLE level_discovery_runs ADD COLUMN IF NOT EXISTS trigger_reason TEXT;
+ALTER TABLE level_discovery_runs ADD COLUMN IF NOT EXISTS merge_mode TEXT;
+ALTER TABLE level_discovery_runs ADD COLUMN IF NOT EXISTS regime_gap_pct DOUBLE PRECISION;
+ALTER TABLE level_discovery_runs ADD COLUMN IF NOT EXISTS envelope_min DOUBLE PRECISION;
+ALTER TABLE level_discovery_runs ADD COLUMN IF NOT EXISTS envelope_max DOUBLE PRECISION;
+```
+
+| Column | Values |
+|--------|--------|
+| `trigger_reason` | `range_escape` \| `interval` \| `manual` \| `startup` |
+| `merge_mode` | `drift` \| `regime_shift` |
+| `regime_gap_pct` | Envelope escape severity when `range_escape` |
+| `envelope_min`, `envelope_max` | Active live book before merge |
+
+**Envelope cheap check** (every bar) must filter active levels only:
+
+```sql
+SELECT MIN(level_price), MAX(level_price)
+FROM price_levels
+WHERE symbol = %s AND is_active = TRUE;
+```
 
 No change to `level_touches` schema expected.
 
@@ -399,7 +473,7 @@ No change to `level_touches` schema expected.
 | `LEVEL_DISCOVERY_INTERVAL_SEC` | `3600` | Worker — **hourly fallback**, not daily |
 | `LEVEL_DISCOVERY_COOLDOWN_SEC` | `300` | Worker — after **completed** run; pending coalesced reruns exempt |
 | `LEVEL_DISCOVERY_MAX_CONCURRENT` | `4` | Worker — max simultaneous discovery tasks across all symbols |
-| `LEVEL_DISCOVERY_STALE_PCT` | `3.0` | Worker — **drift path only**: deactivate level if farther than this from last close and no window touches |
+| `LEVEL_DISCOVERY_STALE_PCT` | `3.0` | Worker — **drift path only**: archive level if farther than this from last close and no window touches |
 | `LEVEL_DISCOVERY_REGIME_GAP_PCT` | `8.0` | Worker — envelope escape at or above this → **regime_shift** wholesale path |
 | `LEVEL_DISCOVERY_REGIME_STALE_FRACTION` | `0.50` | Worker — if ≥ this fraction of active watchlist is drift-stale, treat as regime_shift even below gap pct |
 | `LEVEL_DISCOVERY_MIN_BARS` | `500` | Worker — skip symbol if window too thin |
@@ -417,7 +491,7 @@ No change to `level_touches` schema expected.
 | `backend/ml/features/rolling_level_discovery.py` | Core discovery + merge + stale logic |
 | `backend/scripts/run_rolling_discovery.py` | Manual/cron entry point |
 | `backend/chart_watcher/level_discovery_scheduler.py` | Event trigger + coalesce-one pending + pool cap + cooldown |
-| `backend/db/migrations/008_level_discovery.sql` | Audit table (+ optional columns) |
+| `backend/db/migrations/008_level_discovery.sql` | Archive table + live provenance columns + discovery audit |
 | `backend/tests/unit/test_rolling_level_discovery.py` | Merge, stale, watchlist sync, envelope tests |
 | `backend/tests/unit/test_level_discovery_scheduler.py` | Overlap coalesce, priority merge, cooldown, pool cap tests |
 
@@ -428,7 +502,7 @@ No change to `level_touches` schema expected.
 | File | Change |
 |------|--------|
 | `backend/chart_watcher/chart_watch_runner.py` | Cheap envelope check every bar; enqueue discovery async |
-| `backend/ml/features/level_intelligence.py` | Shared constants; optional `discovery_source` on create |
+| `backend/ml/features/level_intelligence.py` | Shared constants; set `discovery_source` on create; respect `is_active` |
 | `backend/ml/features/level_history.py` | Export clustering helpers for reuse (or call from discovery module) |
 | `backend/ml/features/trade_exit_optimizer.py` | Partial recompute API |
 | `backend/scripts/seed_level_intelligence.py` | Delegate clustering/merge to shared module (reduce duplication) |
@@ -463,20 +537,20 @@ When rolling discovery finds level **L_new** and DB has **L_old**:
 
 1. If `|L_new - L_old| / L_old <= cluster_pct` → **same level**; update `price_min`/`price_max`; keep touch stats.
 2. If no match → **insert** new `price_levels` row with `discovery_source = 'rolling'`.
-3. **Drift deactivation only:** if an active level is > `LEVEL_DISCOVERY_STALE_PCT` from last close **and** had zero touches in the rolling window → `level_watchlist.is_active = FALSE` (and flag `price_levels.is_active` if column exists).
+3. **Drift archive only:** if an active level is > `LEVEL_DISCOVERY_STALE_PCT` from last close **and** had zero touches in the rolling window → copy to `price_levels_archive` with `archive_reason = 'drift_stale'`, set live `is_active = FALSE`, `level_watchlist.is_active = FALSE`.
 4. Exit refresh: **partial** — recompute only merged or newly activated level prices.
-5. Never delete `level_touches` or `price_levels` in v1 — deactivate only (audit trail).
+5. Never delete `level_touches` or archived rows — live row may be archived; history preserved in `price_levels_archive`.
 
 ### Mode B — Regime shift (`merge_mode = 'regime_shift'`)
 
 Large gap (e.g. BTC/SOL/ES 20–40%, or MES multi-session displacement). Incremental drift cleanup is the wrong tool.
 
 1. Run full swing discovery on the rolling window → `discovered_min`, `discovered_max`, new cluster set.
-2. **Bulk deactivate** all `level_watchlist` / `price_levels` rows with `level_price` outside `[discovered_min * (1 - buffer), discovered_max * (1 + buffer)]` — the old book is retired as a unit, not one level at a time.
-3. Merge **all** discovered clusters into `price_levels` (insert new; match-and-preserve stats only where cluster overlaps old level within tolerance).
+2. **Bulk archive** all active live levels with `level_price` outside `[discovered_min * (1 - buffer), discovered_max * (1 + buffer)]` → `price_levels_archive` with `archive_reason = 'regime_shift'`; set live `is_active = FALSE` and deactivate watchlist.
+3. Merge **all** discovered clusters into `price_levels` (insert new; match-and-preserve stats only where cluster overlaps archived/live level within tolerance — **reactivate** on match, count `levels_reactivated`).
 4. Rebuild active watchlist from merged levels meeting touch/hold thresholds (may start mostly in **building** until touches accumulate).
 5. Exit refresh: **full-symbol** `recompute_symbol()` — gate depends on TP/SL/EV; partial refresh is insufficient when most levels are new.
-6. Log `regime_gap_pct` and counts: `levels_deactivated_bulk`, `levels_inserted`, `watchlist_active` post-run.
+6. Log `regime_gap_pct`, `levels_archived`, `levels_reactivated`, `watchlist_active` post-run.
 
 **Do not** apply the 3% drift rule in isolation during a regime shift — that leaves a sparse, incoherent level set strung across a 30%+ dead zone.
 
@@ -486,9 +560,13 @@ Large gap (e.g. BTC/SOL/ES 20–40%, or MES multi-session displacement). Increme
 range_escape fired?
   ├─ gap_pct >= REGIME_GAP_PCT  ──────────────────► regime_shift
   ├─ stale_watchlist_fraction >= REGIME_STALE_FRAC ► regime_shift
-  └─ else ─────────────────────────────────────────► drift (+ selective 3% deactivation)
+  └─ else ─────────────────────────────────────────► drift (+ selective 3% archive)
 interval fallback (no escape) ───────────────────► drift (unless stale fraction triggers regime)
 ```
+
+### Data quality gate (before merge)
+
+If `bars_loaded / bars_expected < MIN_COVERAGE` (e.g. 80%), write audit row with `skipped_reason = 'insufficient_coverage'` and do not archive or merge — stale book unchanged.
 
 ---
 
@@ -503,8 +581,8 @@ interval fallback (no escape) ────────────────�
 
 ## Success criteria
 
-1. After a **minor** envelope escape (~4% MES), `merge_mode = 'drift'`: new clusters near price, old outliers deactivated selectively; gate actionable count recovers within one discovery + partial exit pass.
-2. After a **regime** move (≥8% gap or bulk stale watchlist), `merge_mode = 'regime_shift'`: audit row shows large `regime_gap_pct`, high `levels_deactivated`, new level band overlapping current close range.
+1. After a **minor** envelope escape (~4% MES), `merge_mode = 'drift'`: new clusters near price, stale outliers **archived** selectively; gate actionable count recovers within one discovery + partial exit pass.
+2. After a **regime** move (≥8% gap or bulk stale watchlist), `merge_mode = 'regime_shift'`: audit row shows large `regime_gap_pct`, high `levels_archived`, new level band overlapping current close range.
 3. `simulate_tolerance_pct.py` diagnostics show `level range` overlapping recent `close range` after the breakout bar sequence.
 4. Progress tab shows non-zero `building` / `qualified` where price is near active levels same session (may lag briefly after regime_shift until exit recompute completes).
 5. `level_discovery_runs` shows `range_escape` + correct `merge_mode`; hourly `interval` rows act as safety net.
@@ -520,7 +598,7 @@ interval fallback (no escape) ────────────────�
 3. Run live for pilot symbols; compare to `analyze_level_neighborhoods.py` output.
 4. Enable worker with **`LEVEL_DISCOVERY_TRIGGER_MODE=event+interval`**, **`LEVEL_DISCOVERY_INTERVAL_SEC=3600`**, **`LEVEL_DISCOVERY_COOLDOWN_SEC=300`**.
 5. Simulate **drift** breakout (~4%): confirm `merge_mode = 'drift'` in `level_discovery_runs`.
-6. Simulate **regime** scenario (or pilot crypto symbol): confirm `merge_mode = 'regime_shift'`, bulk deactivation count, full exit recompute.
+6. Simulate **regime** scenario (or pilot crypto symbol): confirm `merge_mode = 'regime_shift'`, high `levels_archived`, full exit recompute.
 7. Enable partial/full exit recompute per mode; verify gate via `simulate_tolerance_pct.py`.
 8. Update go-live checklist; monitor `level_discovery_runs` for errors, trigger mix, and merge_mode distribution.
 9. Overlap test: while one symbol’s discovery is running (long window), fire interval + second range_escape → confirm single coalesced rerun, not parallel tasks.
