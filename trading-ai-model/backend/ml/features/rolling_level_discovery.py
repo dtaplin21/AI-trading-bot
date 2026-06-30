@@ -15,7 +15,7 @@ from pathlib import Path
 import pandas as pd
 
 from config.settings import get_settings
-from config.symbols import SYMBOLS
+from config.symbols import get_symbol_or_none
 from data.storage.pg_connect import connect_psycopg2, is_database_url_placeholder
 from ml.features.level_history import LEVEL_CONFIGS, Level, LevelHistoryTracker
 from ml.features.level_intelligence import SCHEMA_SQL
@@ -391,7 +391,11 @@ def discover_symbol(
     dry_run: bool = False,
 ) -> DiscoveryResult:
     sym = symbol.upper()
-    ac = asset_class or SYMBOLS.get(sym).asset_class if sym in SYMBOLS else "equity"
+    if asset_class:
+        ac = asset_class
+    else:
+        spec = get_symbol_or_none(sym)
+        ac = spec.asset_class if spec is not None else "equity"
     result = DiscoveryResult(symbol=sym, window_days=window_days)
     result.bars_expected = bars_expected_5m(window_days)
 
@@ -484,18 +488,24 @@ def discover_symbol(
             merged = 0
             reactivated = 0
             matched_existing: set[float] = set()
+            merged_level_prices: list[float] = []
+            reactivated_level_prices: list[float] = []
 
             for lvl in discovered:
                 idx = _match_level_price(lvl.price, existing_rows, cluster)
                 if idx is not None:
                     lp, was_active = existing_rows[idx]
                     matched_existing.add(lp)
+                    merged_level_prices.append(lp)
                     _apply_level_stats(cur, sym, lp, lvl)
                     if not was_active:
                         reactivated += 1
+                        reactivated_level_prices.append(lp)
                     merged += 1
                 else:
+                    lp = round(lvl.price, 5)
                     _insert_discovered_level(cur, sym, lvl)
+                    merged_level_prices.append(lp)
                     merged += 1
 
             archived = 0
@@ -536,6 +546,27 @@ def discover_symbol(
                 result.levels_archived,
                 result.watchlist_active,
             )
+
+            if os.getenv("LEVEL_EXIT_RECOMPUTE_ON_DISCOVERY", "true").lower() in (
+                "true",
+                "1",
+                "yes",
+            ):
+                from ml.features.partial_exit_refresh import (
+                    recompute_after_discovery,
+                    recompute_symbol,
+                )
+
+                if result.merge_mode == "regime_shift":
+                    recompute_symbol(sym, ac, df)
+                else:
+                    recompute_after_discovery(
+                        sym,
+                        ac,
+                        df,
+                        merged_level_prices,
+                        reactivated_level_prices,
+                    )
         finally:
             conn.close()
 
