@@ -1,0 +1,47 @@
+---
+description: Run Python and pytest via backend .venv (never system python3)
+alwaysApply: true
+---
+
+# Python & pytest — use the project venv
+
+This repo's backend requires **Python 3.11–3.13**. macOS `python3` is often **3.14** and has no project deps.
+
+## Running tests
+
+Always run pytest from `trading-ai-model/backend` using the venv interpreter:
+
+```bash
+cd trading-ai-model/backend && .venv/bin/python -m pytest <path> -v
+```
+
+Or use the Makefile:
+
+```bash
+cd trading-ai-model/backend && make test-file FILE=tests/unit/test_foo.py
+cd trading-ai-model/backend && make test PYTEST_ARGS="tests/unit -v"
+```
+
+## Do not use
+
+- bare `python`, `python3`, or `pytest` without activating venv or using `.venv/bin/python`
+- system Python 3.14 for this project
+
+## After code changes
+
+Run targeted unit tests for the modules you touched before finishing. Examples:
+
+- `tests/unit/test_rolling_level_discovery.py`
+- `tests/unit/test_level_discovery_scheduler.py`
+- `tests/unit/test_level_entry_gate.py`
+- `tests/unit/test_trading_pipeline_supervisor.py`
+
+## Venv missing?
+
+```bash
+cd trading-ai-model/backend
+python3.13 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install -e ".[dev]"
+```
