@@ -40,6 +40,7 @@ import pandas as pd
 from agents.news.db_news_reader import DbNewsReader
 from agents.news.market_news_agent import MarketNewsAgent
 from chart_watcher.bar_assembler import MultiSymbolAssembler
+from chart_watcher.level_discovery_scheduler import get_discovery_scheduler
 from chart_watcher.session_scheduler import SessionScheduler, WatcherMode
 from config.watchlist import watcher_symbols_from_env, watcher_timeframes_from_env
 from pipeline.feature_fusion_news_patch import NewsAgentProtocol
@@ -657,15 +658,27 @@ class ChartWatchRunner:
                 ohlcv_1m = self._history_to_dataframe(history_1m)
 
         if ohlcv_1m is not None and len(ohlcv_1m) >= MIN_OHLCV_BARS:
-            try:
-                from config.symbols import get_symbol_or_none
-                from ml.features.level_intelligence import get_system
+            from config.symbols import get_symbol_or_none
+            from ml.features.level_intelligence import get_system
 
-                spec = get_symbol_or_none(bar.symbol)
-                asset_class = spec.asset_class if spec else "equity"
+            spec = get_symbol_or_none(bar.symbol)
+            asset_class = spec.asset_class if spec else "equity"
+            try:
                 get_system(bar.symbol, asset_class).process_bar(ohlcv_1m)
             except Exception as exc:
                 logger.debug("LevelIntelligence process_bar [%s]: %s", bar.symbol, exc)
+
+            try:
+                scheduler = get_discovery_scheduler()
+                await scheduler.check_and_maybe_trigger(
+                    symbol=bar.symbol,
+                    current_price=bar.close,
+                    asset_class=asset_class,
+                )
+            except Exception as exc:
+                logger.debug(
+                    "LevelDiscoveryScheduler trigger check [%s]: %s", bar.symbol, exc
+                )
 
         if bar.timeframe == "1m" and sup:
             try:

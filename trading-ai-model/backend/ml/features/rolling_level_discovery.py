@@ -90,6 +90,33 @@ def bars_expected_5m(window_days: int) -> int:
     return max(1, window_days * 24 * 12)
 
 
+def check_window_coverage(symbol: str, window_days: int) -> tuple[int, int, float]:
+    """Return (1m bars loaded, 1m bars expected, coverage pct) for the sliding window."""
+    sym = symbol.upper()
+    expected = max(1, window_days * 1440)
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM ohlcv_candles
+            WHERE symbol = %s
+              AND timeframe = '1m'
+              AND time >= NOW() - make_interval(days => %s)
+              AND close > 0
+            """,
+            (sym, window_days),
+        )
+        row = cur.fetchone()
+        loaded = int(row[0]) if row else 0
+        cur.close()
+    finally:
+        conn.close()
+    pct = min(100.0, loaded / expected * 100.0) if expected else 0.0
+    return loaded, expected, pct
+
+
 def load_bars_window(symbol: str, window_days: int) -> pd.DataFrame:
     """Load last N days of 1m bars, resample to 5m, drop invalid closes."""
     sym = symbol.upper()
@@ -218,6 +245,81 @@ def _archive_level(cur, symbol: str, level_price: float, reason: str) -> None:
         """,
         (symbol.upper(), level_price),
     )
+
+
+def archive_stale_levels(symbol: str, last_close: float) -> int:
+    """Archive active levels whose price is far from last_close (drift stale)."""
+    sym = symbol.upper()
+    stale_frac = STALE_PCT / 100.0
+    conn = _get_conn()
+    count = 0
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT symbol, level_price, touch_count, hold_rate, last_touched
+            FROM price_levels
+            WHERE symbol = %s AND COALESCE(is_active, TRUE) = TRUE
+            """,
+            (sym,),
+        )
+        rows = cur.fetchall()
+        for row in rows:
+            if isinstance(row, dict):
+                level_price = float(row["level_price"])
+            else:
+                level_price = float(row[1])
+            dist = abs(level_price - last_close) / (last_close + 1e-10)
+            if dist > stale_frac:
+                _archive_level(cur, sym, level_price, "drift_stale")
+                count += 1
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+    return count
+
+
+def reactivate_if_price_returns(symbol: str, current_price: float) -> int:
+    """Reactivate archived levels when current price is inside their price zone."""
+    sym = symbol.upper()
+    conn = _get_conn()
+    count = 0
+    try:
+        cur = conn.cursor()
+        _ensure_discovery_schema(cur)
+        cur.execute(
+            """
+            SELECT symbol, level_price, price_min, price_max, touch_count, hold_rate
+            FROM price_levels
+            WHERE symbol = %s
+              AND COALESCE(is_active, TRUE) = FALSE
+              AND %s BETWEEN price_min AND price_max
+            """,
+            (sym, current_price),
+        )
+        rows = cur.fetchall()
+        for row in rows:
+            if isinstance(row, dict):
+                level_price = float(row["level_price"])
+            else:
+                level_price = float(row[1])
+            cur.execute(
+                """
+                UPDATE price_levels
+                SET is_active = TRUE,
+                    discovery_source = 'rolling',
+                    last_discovery_at = NOW()
+                WHERE symbol = %s AND level_price = %s
+                """,
+                (sym, level_price),
+            )
+            count += 1
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+    return count
 
 
 def _apply_level_stats(cur, symbol: str, level_price: float, level: Level) -> None:
@@ -383,6 +485,19 @@ def _write_audit_row(cur, result: DiscoveryResult) -> None:
     )
 
 
+def log_discovery_run(result: DiscoveryResult) -> None:
+    """Persist a level_discovery_runs audit row."""
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        _ensure_discovery_schema(cur)
+        _write_audit_row(cur, result)
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+
+
 def discover_symbol(
     symbol: str,
     *,
@@ -397,44 +512,33 @@ def discover_symbol(
         spec = get_symbol_or_none(sym)
         ac = spec.asset_class if spec is not None else "equity"
     result = DiscoveryResult(symbol=sym, window_days=window_days)
-    result.bars_expected = bars_expected_5m(window_days)
 
     try:
-        df = load_bars_window(sym, window_days)
-        result.bars_loaded = len(df)
-        result.coverage_pct = (
-            min(100.0, result.bars_loaded / result.bars_expected * 100.0)
-            if result.bars_expected
-            else 0.0
-        )
+        loaded, expected, coverage_pct = check_window_coverage(sym, window_days)
+        result.bars_loaded = loaded
+        result.bars_expected = expected
+        result.coverage_pct = coverage_pct
 
         if result.bars_loaded < MIN_BARS:
             result.skipped_reason = "insufficient_bars"
             if not dry_run:
-                conn = _get_conn()
-                try:
-                    cur = conn.cursor()
-                    _ensure_discovery_schema(cur)
-                    _write_audit_row(cur, result)
-                    conn.commit()
-                    cur.close()
-                finally:
-                    conn.close()
+                log_discovery_run(result)
             return result
 
         if result.coverage_pct < MIN_COVERAGE_PCT:
             result.skipped_reason = "insufficient_coverage"
             if not dry_run:
-                conn = _get_conn()
-                try:
-                    cur = conn.cursor()
-                    _ensure_discovery_schema(cur)
-                    _write_audit_row(cur, result)
-                    conn.commit()
-                    cur.close()
-                finally:
-                    conn.close()
+                log_discovery_run(result)
             return result
+
+        df = load_bars_window(sym, window_days)
+        result.bars_loaded = len(df)
+        result.bars_expected = bars_expected_5m(window_days)
+        result.coverage_pct = (
+            min(100.0, result.bars_loaded / result.bars_expected * 100.0)
+            if result.bars_expected
+            else 0.0
+        )
 
         result.last_close = float(df["close"].iloc[-1])
         tracker = LevelHistoryTracker(symbol=sym, asset_class=ac)
@@ -445,15 +549,7 @@ def discover_symbol(
         if not discovered:
             result.skipped_reason = "no_levels_found"
             if not dry_run:
-                conn = _get_conn()
-                try:
-                    cur = conn.cursor()
-                    _ensure_discovery_schema(cur)
-                    _write_audit_row(cur, result)
-                    conn.commit()
-                    cur.close()
-                finally:
-                    conn.close()
+                log_discovery_run(result)
             return result
 
         if dry_run:
@@ -574,15 +670,7 @@ def discover_symbol(
         logger.error("%s: discovery failed: %s", sym, exc, exc_info=True)
         result.error = str(exc)
         try:
-            conn = _get_conn()
-            try:
-                cur = conn.cursor()
-                _ensure_discovery_schema(cur)
-                _write_audit_row(cur, result)
-                conn.commit()
-                cur.close()
-            finally:
-                conn.close()
+            log_discovery_run(result)
         except Exception:
             logger.debug("Could not write discovery audit row after error", exc_info=True)
 
