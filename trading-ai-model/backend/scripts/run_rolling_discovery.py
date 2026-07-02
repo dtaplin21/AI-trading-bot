@@ -53,7 +53,13 @@ def main() -> None:
 
     for sym in symbols:
         asset_class = ASSET_CLASS_MAP.get(sym, "equity")
-        result = discover_symbol(sym, asset_class=asset_class, window_days=args.days, dry_run=args.dry_run)
+        result = discover_symbol(
+            sym,
+            asset_class=asset_class,
+            window_days=args.days,
+            dry_run=args.dry_run,
+            trigger_reason="manual",
+        )
 
         if result.skipped_reason:
             print(f"  {sym:<8} SKIPPED — {result.skipped_reason}")
@@ -63,7 +69,9 @@ def main() -> None:
             print(
                 f"  {sym:<8} coverage={result.coverage_pct:>5.1f}%  "
                 f"touches={result.levels_found:>5}  archived={result.levels_archived:>3}  "
-                f"reactivated={result.levels_reactivated:>3}  active_watchlist={result.watchlist_active:>4}"
+                f"reactivated={result.levels_reactivated:>3}  active_watchlist={result.watchlist_active:>4}  "
+                f"trigger={result.trigger_reason}  mode={result.merge_mode}  "
+                f"coalesced={result.runs_coalesced}"
             )
 
     print("=" * 90)

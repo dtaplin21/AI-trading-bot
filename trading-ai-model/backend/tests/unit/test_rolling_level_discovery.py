@@ -81,12 +81,17 @@ def test_discover_symbol_skips_on_insufficient_coverage():
             from ml.features.rolling_level_discovery import discover_symbol
 
             result = discover_symbol(
-                "AUDUSD", asset_class="forex", window_days=60, dry_run=True
+                "AUDUSD",
+                asset_class="forex",
+                window_days=60,
+                dry_run=True,
+                trigger_reason="manual",
             )
 
     assert result.skipped_reason is not None
     assert "insufficient_coverage" in result.skipped_reason
     assert result.levels_found == 0
+    assert result.trigger_reason == "manual"
 
 
 def test_discover_symbol_dry_run_does_not_write():

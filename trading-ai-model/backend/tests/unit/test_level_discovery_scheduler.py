@@ -7,10 +7,11 @@ Tests for the single-flight coalescing scheduler.
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 import time
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -24,6 +25,10 @@ from chart_watcher.level_discovery_scheduler import (
     TriggerPriority,
     _RANGE_CACHE,
     get_discovery_scheduler,
+    is_valid_bar_close,
+    normalize_trigger_reason,
+    update_range_cache,
+    warm_range_cache,
 )
 
 
@@ -176,3 +181,166 @@ def test_get_discovery_scheduler_returns_singleton():
     s1 = get_discovery_scheduler()
     s2 = get_discovery_scheduler()
     assert s1 is s2
+
+
+def test_normalize_trigger_reason_range_escape():
+    reason = normalize_trigger_reason(
+        "range_escape_3.2pct_outside_range", TriggerPriority.RANGE_ESCAPE
+    )
+    assert reason == "range_escape"
+
+
+def test_normalize_trigger_reason_regime_shift():
+    reason = normalize_trigger_reason(
+        "regime_shift_9.5pct_outside_range", TriggerPriority.REGIME_SHIFT
+    )
+    assert reason == "regime_shift"
+
+
+def test_normalize_trigger_reason_interval():
+    reason = normalize_trigger_reason("scheduled_interval", TriggerPriority.INTERVAL)
+    assert reason == "interval"
+
+
+def test_normalize_trigger_reason_startup():
+    reason = normalize_trigger_reason("startup", TriggerPriority.RANGE_ESCAPE)
+    assert reason == "startup"
+
+
+def test_update_range_cache_populates_range_cache():
+    _RANGE_CACHE.clear()
+
+    def _store(sym: str) -> tuple[float, float]:
+        _RANGE_CACHE[sym] = (4861.0, 7321.0)
+        return (4861.0, 7321.0)
+
+    with patch(
+        "chart_watcher.level_discovery_scheduler._fetch_and_store_range_cache",
+        side_effect=_store,
+    ) as mock_fetch:
+        update_range_cache("MES")
+
+    mock_fetch.assert_called_once_with("MES")
+    assert _RANGE_CACHE["MES"] == (4861.0, 7321.0)
+
+
+def test_classify_trigger_after_warm_cache_mes_stale_envelope():
+    sched = LevelDiscoveryScheduler()
+    _RANGE_CACHE["MES"] = (4861.0, 7321.0)
+
+    priority, reason = sched._classify_trigger("MES", current_price=7600.0)
+
+    assert priority == TriggerPriority.RANGE_ESCAPE
+    assert "range_escape" in reason
+
+
+@pytest.mark.asyncio
+async def test_run_once_passes_trigger_metadata_to_discover_symbol():
+    sched = LevelDiscoveryScheduler()
+    with patch(
+        "chart_watcher.level_discovery_scheduler.asyncio.to_thread",
+        new_callable=AsyncMock,
+    ) as mock_to_thread:
+        mock_to_thread.return_value = MagicMock(
+            error=None, skipped_reason=None, coverage_pct=100.0,
+            levels_archived=0, levels_reactivated=0, watchlist_active=0, merge_mode="drift",
+        )
+        await sched._run_once(
+            "MES",
+            "futures",
+            "range_escape_3.2pct_outside_range",
+            TriggerPriority.RANGE_ESCAPE,
+            runs_coalesced=2,
+        )
+
+    mock_to_thread.assert_awaited_once()
+    args, kwargs = mock_to_thread.call_args
+    assert args[0].__name__ == "discover_symbol"
+    assert kwargs["trigger_reason"] == "range_escape"
+    assert kwargs["runs_coalesced"] == 2
+
+
+def test_warm_range_cache_logs_no_active_levels(caplog):
+    _RANGE_CACHE.clear()
+    with patch(
+        "chart_watcher.level_discovery_scheduler._fetch_and_store_range_cache",
+        return_value=None,
+    ):
+        with caplog.at_level(logging.INFO, logger="level_discovery_scheduler"):
+            warm_range_cache(["MES"])
+
+    assert "no active levels" in caplog.text
+
+
+def test_warm_range_cache_logs_envelope(caplog):
+    _RANGE_CACHE.clear()
+    with patch(
+        "chart_watcher.level_discovery_scheduler._fetch_and_store_range_cache",
+        return_value=(100.0, 110.0),
+    ):
+        with caplog.at_level(logging.INFO, logger="level_discovery_scheduler"):
+            warm_range_cache(["MES"])
+
+    assert "range cache warmed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_startup_discovery_bypasses_cooldown():
+    sched = LevelDiscoveryScheduler()
+    state = sched._state("MES")
+    state.last_run_finished_at = time.time()
+    _RANGE_CACHE["MES"] = (4861.0, 7321.0)
+
+    with patch(
+        "chart_watcher.level_discovery_scheduler.fetch_last_close",
+        return_value=7600.0,
+    ):
+        with patch(
+            "chart_watcher.level_discovery_scheduler.asyncio.create_task",
+            side_effect=_consume_create_task,
+        ) as mock_task:
+            await sched.maybe_enqueue_startup_discovery(["MES"])
+
+    mock_task.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_startup_discovery_skips_when_price_inside_envelope():
+    sched = LevelDiscoveryScheduler()
+    _RANGE_CACHE["MES"] = (4861.0, 7321.0)
+
+    with patch(
+        "chart_watcher.level_discovery_scheduler.fetch_last_close",
+        return_value=7000.0,
+    ):
+        with patch(
+            "chart_watcher.level_discovery_scheduler.asyncio.create_task",
+            side_effect=_consume_create_task,
+        ) as mock_task:
+            await sched.maybe_enqueue_startup_discovery(["MES"])
+
+    mock_task.assert_not_called()
+
+
+def test_classify_escape_trigger_ignores_zero_close():
+    sched = LevelDiscoveryScheduler()
+    _RANGE_CACHE["EURUSD"] = (1.05, 1.10)
+    priority, reason = sched._classify_escape_trigger("EURUSD", 0.0)
+    assert priority is None
+    assert reason == ""
+
+
+@pytest.mark.asyncio
+async def test_check_and_maybe_trigger_skips_zero_close():
+    sched = LevelDiscoveryScheduler()
+    _RANGE_CACHE["EURUSD"] = (1.05, 1.10)
+    result = await sched.check_and_maybe_trigger("EURUSD", 0.0, "forex")
+    assert result.status == "skipped"
+    assert result.reason == "invalid_bar_close"
+
+
+def test_is_valid_bar_close():
+    assert is_valid_bar_close(1.0845)
+    assert not is_valid_bar_close(0.0)
+    assert not is_valid_bar_close(-1.0)
+    assert not is_valid_bar_close(None)

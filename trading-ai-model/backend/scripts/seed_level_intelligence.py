@@ -70,7 +70,7 @@ def load_all_bars(symbol: str) -> pd.DataFrame:
         query = """
             SELECT time, open, high, low, close, volume
             FROM ohlcv_candles
-            WHERE symbol = %s AND timeframe = '1m'
+            WHERE symbol = %s AND timeframe = '1m' AND close > 0
             ORDER BY time ASC
         """
         df = pd.read_sql(query, conn, params=(symbol.upper(),))
@@ -83,6 +83,10 @@ def load_all_bars(symbol: str) -> pd.DataFrame:
         df = store.read(symbol.upper(), "1m")
         if df.empty:
             return df
+
+    df = df.loc[df["close"] > 0]
+    if df.empty:
+        return df
 
     df_5m = (
         df.resample("5min")

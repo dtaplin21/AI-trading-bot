@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -243,3 +244,68 @@ async def test_symbol_bar_source_db_fallback(tmp_path, monkeypatch):
     bars = [b async for b in runner._symbol_bar_source("MES", start=start, end=end)]
     assert len(bars) == 2
     assert bars[0].symbol == "MES"
+
+
+@pytest.mark.asyncio
+async def test_start_warms_range_cache_before_run(monkeypatch):
+    from chart_watcher import chart_watch_runner as cwr
+
+    warm_calls: list[tuple] = []
+
+    async def fake_to_thread(fn, *args):
+        warm_calls.append((fn, args))
+        return None
+
+    paper_started = False
+
+    async def fake_run_paper():
+        nonlocal paper_started
+        paper_started = True
+
+    monkeypatch.setattr(cwr.asyncio, "to_thread", fake_to_thread)
+    runner = cwr.ChartWatchRunner()
+    runner._mode = WatcherMode.PAPER
+    runner._start_news = AsyncMock(return_value=None)
+    runner._stop_news = AsyncMock(return_value=None)
+    runner._run_paper = fake_run_paper
+    runner._assembler.flush_all = AsyncMock(return_value=None)
+
+    await runner.start()
+
+    assert warm_calls
+    fn, args = warm_calls[0]
+    assert fn.__name__ == "warm_range_cache"
+    assert args[0] == list(cwr.SYMBOLS)
+    assert paper_started
+
+
+@pytest.mark.asyncio
+async def test_start_enqueues_startup_discovery_after_warm(monkeypatch):
+    from chart_watcher import chart_watch_runner as cwr
+
+    startup_calls: list[list[str]] = []
+
+    class FakeScheduler:
+        async def maybe_enqueue_startup_discovery(self, symbols):
+            startup_calls.append(list(symbols))
+
+    async def fake_to_thread(fn, *args):
+        if fn.__name__ == "warm_range_cache":
+            return None
+        return None
+
+    async def fake_run_paper():
+        return None
+
+    monkeypatch.setattr(cwr.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(cwr, "get_discovery_scheduler", lambda: FakeScheduler())
+    runner = cwr.ChartWatchRunner()
+    runner._mode = WatcherMode.PAPER
+    runner._start_news = AsyncMock(return_value=None)
+    runner._stop_news = AsyncMock(return_value=None)
+    runner._run_paper = fake_run_paper
+    runner._assembler.flush_all = AsyncMock(return_value=None)
+
+    await runner.start()
+
+    assert startup_calls == [list(cwr.SYMBOLS)]

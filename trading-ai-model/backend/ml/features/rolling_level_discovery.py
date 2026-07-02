@@ -61,7 +61,12 @@ class DiscoveryResult:
     levels_reactivated: int = 0
     watchlist_active: int = 0
     last_close: float | None = None
-    merge_mode: str = "drift"
+    merge_mode: str | None = None
+    trigger_reason: str | None = None
+    regime_gap_pct: float | None = None
+    envelope_min: float | None = None
+    envelope_max: float | None = None
+    runs_coalesced: int = 0
     skipped_reason: str | None = None
     error: str | None = None
 
@@ -71,11 +76,13 @@ def _database_url() -> str:
 
 
 def _ensure_discovery_schema(cur) -> None:
-    """Apply level intelligence base schema + 008 discovery migration if present."""
+    """Apply level intelligence base schema + discovery migrations if present."""
     cur.execute(SCHEMA_SQL)
-    migration = Path(__file__).resolve().parents[2] / "db/migrations/008_level_discovery.sql"
-    if migration.is_file():
-        cur.execute(migration.read_text())
+    migrations_dir = Path(__file__).resolve().parents[2] / "db/migrations"
+    for name in ("008_level_discovery.sql", "009_level_discovery_audit.sql"):
+        migration = migrations_dir / name
+        if migration.is_file():
+            cur.execute(migration.read_text())
 
 
 def _get_conn():
@@ -156,6 +163,8 @@ def load_bars_window(symbol: str, window_days: int) -> pd.DataFrame:
         )
         .dropna()
     )
+    if isinstance(df_5m, pd.DataFrame) and not df_5m.empty:
+        df_5m = df_5m.loc[df_5m["close"] > 0]
     return df_5m if isinstance(df_5m, pd.DataFrame) else pd.DataFrame()
 
 
@@ -181,6 +190,26 @@ def is_outside_envelope(close: float, env_min: float, env_max: float, buffer_pct
     return close < env_min * (1.0 - buf) or close > env_max * (1.0 + buf)
 
 
+def envelope_escape_gap_pct(
+    close: float,
+    envelope: tuple[float, float] | None,
+    *,
+    buffer_pct: float | None = None,
+) -> float | None:
+    """Percent outside buffered envelope; None if inside or no envelope."""
+    if envelope is None:
+        return None
+    buf = buffer_pct if buffer_pct is not None else float(
+        os.getenv("LEVEL_DISCOVERY_RANGE_BUFFER_PCT", "0.15")
+    )
+    env_min, env_max = envelope
+    if not is_outside_envelope(close, env_min, env_max, buf):
+        return None
+    upside = max(0.0, (close - env_max) / env_max * 100.0) if env_max else 0.0
+    downside = max(0.0, (env_min - close) / env_min * 100.0) if env_min else 0.0
+    return max(upside, downside)
+
+
 def classify_discovery_mode(
     close: float,
     envelope: tuple[float, float] | None,
@@ -189,15 +218,9 @@ def classify_discovery_mode(
 ) -> str:
     if envelope is None:
         return "drift"
-    buf = buffer_pct if buffer_pct is not None else float(
-        os.getenv("LEVEL_DISCOVERY_RANGE_BUFFER_PCT", "0.15")
-    )
-    env_min, env_max = envelope
-    if not is_outside_envelope(close, env_min, env_max, buf):
+    gap_pct = envelope_escape_gap_pct(close, envelope, buffer_pct=buffer_pct)
+    if gap_pct is None:
         return "drift"
-    upside = max(0.0, (close - env_max) / env_max * 100.0) if env_max else 0.0
-    downside = max(0.0, (env_min - close) / env_min * 100.0) if env_min else 0.0
-    gap_pct = max(upside, downside)
     return "regime_shift" if gap_pct >= REGIME_GAP_PCT else "drift"
 
 
@@ -458,14 +481,19 @@ def _sync_watchlist(cur, symbol: str) -> int:
 
 
 def _write_audit_row(cur, result: DiscoveryResult) -> None:
+    regime_gap_pct = (
+        round(result.regime_gap_pct, 4) if result.regime_gap_pct is not None else None
+    )
     cur.execute(
         """
         INSERT INTO level_discovery_runs (
             symbol, window_days, bars_loaded, bars_expected, coverage_pct,
             levels_found, levels_merged, levels_archived, levels_reactivated,
-            watchlist_active, last_close, skipped_reason, finished_at, error
+            watchlist_active, last_close, skipped_reason, runs_coalesced,
+            trigger_reason, merge_mode, regime_gap_pct, envelope_min, envelope_max,
+            finished_at, error
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
         """,
         (
             result.symbol.upper(),
@@ -480,6 +508,12 @@ def _write_audit_row(cur, result: DiscoveryResult) -> None:
             result.watchlist_active,
             result.last_close,
             result.skipped_reason,
+            result.runs_coalesced,
+            result.trigger_reason,
+            result.merge_mode,
+            regime_gap_pct,
+            result.envelope_min,
+            result.envelope_max,
             result.error,
         ),
     )
@@ -504,6 +538,8 @@ def discover_symbol(
     asset_class: str | None = None,
     window_days: int = 60,
     dry_run: bool = False,
+    trigger_reason: str | None = None,
+    runs_coalesced: int = 0,
 ) -> DiscoveryResult:
     sym = symbol.upper()
     if asset_class:
@@ -511,7 +547,12 @@ def discover_symbol(
     else:
         spec = get_symbol_or_none(sym)
         ac = spec.asset_class if spec is not None else "equity"
-    result = DiscoveryResult(symbol=sym, window_days=window_days)
+    result = DiscoveryResult(
+        symbol=sym,
+        window_days=window_days,
+        trigger_reason=trigger_reason,
+        runs_coalesced=runs_coalesced,
+    )
 
     try:
         loaded, expected, coverage_pct = check_window_coverage(sym, window_days)
@@ -561,6 +602,9 @@ def discover_symbol(
             _ensure_discovery_schema(cur)
 
             envelope = price_levels_envelope(sym, conn)
+            if envelope is not None:
+                result.envelope_min, result.envelope_max = envelope
+            result.regime_gap_pct = envelope_escape_gap_pct(result.last_close, envelope)
             result.merge_mode = classify_discovery_mode(result.last_close, envelope)
 
             cur.execute(

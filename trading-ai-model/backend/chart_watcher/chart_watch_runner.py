@@ -40,7 +40,7 @@ import pandas as pd
 from agents.news.db_news_reader import DbNewsReader
 from agents.news.market_news_agent import MarketNewsAgent
 from chart_watcher.bar_assembler import MultiSymbolAssembler
-from chart_watcher.level_discovery_scheduler import get_discovery_scheduler
+from chart_watcher.level_discovery_scheduler import get_discovery_scheduler, warm_range_cache
 from chart_watcher.session_scheduler import SessionScheduler, WatcherMode
 from config.watchlist import watcher_symbols_from_env, watcher_timeframes_from_env
 from pipeline.feature_fusion_news_patch import NewsAgentProtocol
@@ -182,6 +182,13 @@ class ChartWatchRunner:
             is_kill_switch_active(),
         )
         self._publish_watcher_status(force=True)
+
+        logger.info(
+            "ChartWatchRunner: warming level discovery range cache for %d symbols",
+            len(SYMBOLS),
+        )
+        await asyncio.to_thread(warm_range_cache, list(SYMBOLS))
+        await get_discovery_scheduler().maybe_enqueue_startup_discovery(list(SYMBOLS))
 
         try:
             if self._mode == WatcherMode.LIVE:
@@ -670,11 +677,12 @@ class ChartWatchRunner:
 
             try:
                 scheduler = get_discovery_scheduler()
-                await scheduler.check_and_maybe_trigger(
-                    symbol=bar.symbol,
-                    current_price=bar.close,
-                    asset_class=asset_class,
-                )
+                if bar.timeframe == "1m" and bar.close > 0:
+                    await scheduler.check_and_maybe_trigger(
+                        symbol=bar.symbol,
+                        current_price=bar.close,
+                        asset_class=asset_class,
+                    )
             except Exception as exc:
                 logger.debug(
                     "LevelDiscoveryScheduler trigger check [%s]: %s", bar.symbol, exc
