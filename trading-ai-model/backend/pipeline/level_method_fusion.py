@@ -48,7 +48,7 @@ def fused_level_probability(level_setup: LevelSetup, ml_p: float) -> float:
 
 
 def min_method_agreement() -> float:
-    return float(os.getenv("LEVEL_MIN_METHOD_AGREEMENT", "0.35"))
+    return float(os.getenv("LEVEL_MIN_METHOD_AGREEMENT", "0.45"))
 
 
 def plan_from_level_setup(

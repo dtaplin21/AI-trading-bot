@@ -689,6 +689,10 @@ class ChartWatchRunner:
                 )
 
         if bar.timeframe == "1m" and sup:
+            from pipeline.bar_validators import is_valid_bar_close
+
+            if not is_valid_bar_close(bar.close):
+                return
             try:
                 pipeline_ohlcv = (
                     ohlcv_1m if ohlcv_1m is not None and len(ohlcv_1m) >= MIN_OHLCV_BARS else None

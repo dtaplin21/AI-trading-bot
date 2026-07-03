@@ -39,7 +39,7 @@ def confirm_proximity_pct() -> float:
 
 
 def require_bar_confirm() -> bool:
-    return os.getenv("LEVEL_REQUIRE_BAR_CONFIRM", "false").lower() in ("true", "1", "yes")
+    return os.getenv("LEVEL_REQUIRE_BAR_CONFIRM", "true").lower() in ("true", "1", "yes")
 
 
 def regime_veto_confidence() -> float:

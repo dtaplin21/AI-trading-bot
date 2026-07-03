@@ -36,10 +36,7 @@ LEVEL_DISCOVERY_MAX_CONCURRENT = int(os.getenv("LEVEL_DISCOVERY_MAX_CONCURRENT",
 LEVEL_DISCOVERY_RANGE_ESCAPE_PCT = float(os.getenv("LEVEL_DISCOVERY_RANGE_ESCAPE_PCT", "2.0"))
 LEVEL_DISCOVERY_REGIME_GAP_PCT = float(os.getenv("LEVEL_DISCOVERY_REGIME_GAP_PCT", "8.0"))
 
-
-def is_valid_bar_close(price: float | None) -> bool:
-    """Reject zero/negative bar closes (bad forex tick data) for discovery triggers."""
-    return price is not None and price > 0
+from pipeline.bar_validators import is_valid_bar_close  # noqa: E402 — after module constants
 
 
 class TriggerPriority(IntEnum):

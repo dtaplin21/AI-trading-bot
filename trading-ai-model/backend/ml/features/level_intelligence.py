@@ -652,6 +652,10 @@ class LevelIntelligenceSystem:
             return
 
         bar_idx = len(df) - 1
+        latest_close = float(df["close"].iloc[bar_idx])
+        if latest_close <= 0:
+            return
+
         self._resolve_pending(df, bar_idx)
         touch = self._detect_touch(df, bar_idx)
         if touch is None:

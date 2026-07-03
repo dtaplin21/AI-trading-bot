@@ -10,7 +10,7 @@ Changes from paper version:
 Phase 2 — Level-first confirm path:
   • Actionable level → confirm methods only (7 agents from agents.yaml)
   • method_agreement + regime veto → DB entry/TP/SL (no MCTS)
-  • LEVEL_FAST_LANE=true skips confirm for top watchlist rows
+  • LEVEL_FAST_LANE=true skips confirm for top watchlist rows (default off — use confirm path)
 """
 from __future__ import annotations
 
@@ -44,6 +44,7 @@ from pipeline.level_confirmation import (
     evaluate_level_confirmation,
     filter_confirm_method_outputs,
 )
+from pipeline.bar_validators import is_valid_bar_close
 from pipeline.level_entry_gate import LevelEntryGate, _gate_disabled, level_fast_lane_enabled
 from pipeline.level_method_fusion import (
     apply_level_to_plan,
@@ -190,7 +191,21 @@ class TradingPipelineSupervisor:
                 result.audit = self._build_audit(result)
                 return result
 
-            level_setup = self._level_gate.check(current_price=bar.close)
+            if not is_valid_bar_close(bar.close):
+                result.skipped = True
+                result.audit = self._build_audit(result)
+                return result
+
+            prev_close: float | None = None
+            if ohlcv is not None and len(ohlcv) >= 2:
+                prev_close = float(ohlcv["close"].iloc[-2])
+
+            level_setup = self._level_gate.check(
+                current_price=bar.close,
+                bar_high=bar.high,
+                bar_low=bar.low,
+                prev_close=prev_close,
+            )
             if level_setup is None and not _gate_disabled():
                 result.skipped = True
                 result.audit = self._build_audit(result)
