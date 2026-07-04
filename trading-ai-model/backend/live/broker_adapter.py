@@ -16,12 +16,61 @@ from typing import Optional
 
 import httpx
 
+from config.oanda_symbols import is_oanda_tradable, to_instrument
 from config.symbols import get_symbol_or_none, massive_symbol, polygon_ticker_map
+from pipeline.bar_validators import is_valid_bar_close
 from pipeline.schemas import OHLCV
 
 logger = logging.getLogger(__name__)
 
 HTTP_TIMEOUT = 15.0
+
+_OANDA_GRANULARITY = {"1m": "M1", "5m": "M5", "15m": "M15", "1h": "H1"}
+
+
+def oanda_api_key() -> str:
+    return (os.getenv("OANDA_API_KEY") or os.getenv("ONDA_API_KEY") or "").strip()
+
+
+def oanda_api_base() -> str:
+    env = os.getenv("OANDA_ENVIRONMENT", "").strip().lower()
+    if not env:
+        practice = os.getenv("OANDA_PRACTICE", "true").lower() in ("true", "1", "yes")
+        env = "practice" if practice else "live"
+    if env == "live":
+        return "https://api-fxtrade.oanda.com"
+    return "https://api-fxpractice.oanda.com"
+
+
+def parse_oanda_candle(symbol: str, candle: dict, *, timeframe: str = "1m") -> Optional[OHLCV]:
+    """Parse one OANDA v20 candle dict into OHLCV (mid price)."""
+    if not candle.get("complete", True):
+        return None
+    mid = candle.get("mid") or candle.get("bid") or candle.get("ask")
+    if not mid:
+        return None
+    close = float(mid.get("c", 0))
+    if not is_valid_bar_close(close):
+        return None
+    time_str = str(candle.get("time") or "")
+    if not time_str:
+        return None
+    ts = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    open_ = float(mid.get("o", close))
+    high = float(mid.get("h", close))
+    low = float(mid.get("l", close))
+    return OHLCV(
+        symbol=symbol.upper(),
+        timeframe=timeframe,
+        timestamp=ts,
+        open=open_,
+        high=high,
+        low=low,
+        close=close,
+        volume=float(candle.get("volume", 0)),
+    )
 
 
 def _load_polygon_ticker_map() -> dict[str, str]:
@@ -114,22 +163,108 @@ class PolygonBrokerAdapter(BrokerAdapter):
             return None
 
         ts = datetime.fromtimestamp(float(ts_ms) / 1000.0, tz=timezone.utc)
+        close = float(row.get("c", 0))
+        if not is_valid_bar_close(close):
+            logger.warning(
+                "PolygonBrokerAdapter[%s]: rejecting invalid close %.6f (ticker=%s)",
+                symbol,
+                close,
+                ticker,
+            )
+            return None
         return OHLCV(
             symbol=symbol.upper(),
             timeframe="1m",
             timestamp=ts,
-            open=float(row.get("o", 0)),
-            high=float(row.get("h", 0)),
-            low=float(row.get("l", 0)),
-            close=float(row.get("c", 0)),
+            open=float(row.get("o", close)),
+            high=float(row.get("h", close)),
+            low=float(row.get("l", close)),
+            close=close,
             volume=float(row.get("v", 0)),
         )
+
+
+class OandaBrokerAdapter(BrokerAdapter):
+    """OANDA v20 instrument candles — forex M1 bars (no account id required)."""
+
+    broker_id = "oanda"
+
+    def __init__(self, api_key: str | None = None, api_base: str | None = None) -> None:
+        self._api_key = api_key if api_key is not None else oanda_api_key()
+        self._api_base = (api_base or oanda_api_base()).rstrip("/")
+
+    async def fetch_latest_bar(self, symbol: str, timeframe: str = "1m") -> Optional[OHLCV]:
+        instrument = to_instrument(symbol)
+        if instrument is None:
+            logger.debug("OandaBrokerAdapter[%s]: not a tradable forex pair", symbol)
+            return None
+        if not self._api_key:
+            logger.warning("OandaBrokerAdapter: OANDA_API_KEY not set")
+            return None
+
+        granularity = _OANDA_GRANULARITY.get(timeframe, "M1")
+        url = f"{self._api_base}/v3/instruments/{instrument}/candles"
+        params = {"granularity": granularity, "count": "3", "price": "M"}
+        headers = {"Authorization": f"Bearer {self._api_key}"}
+
+        try:
+            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+                response = await client.get(url, params=params, headers=headers)
+                response.raise_for_status()
+                payload = response.json()
+        except httpx.HTTPError as exc:
+            logger.warning("OandaBrokerAdapter[%s] HTTP error: %s", symbol, exc)
+            return None
+
+        candles = payload.get("candles") or []
+        for candle in reversed(candles):
+            bar = parse_oanda_candle(symbol, candle, timeframe=timeframe)
+            if bar is not None:
+                return bar
+
+        logger.debug("OandaBrokerAdapter[%s]: no complete candle (instrument=%s)", symbol, instrument)
+        return None
+
+
+async def fetch_latest_bar_for_symbol(
+    symbol: str,
+    *,
+    broker: str = "polygon",
+    timeframe: str = "1m",
+    oanda_adapter: OandaBrokerAdapter | None = None,
+    primary_adapter: BrokerAdapter | None = None,
+) -> Optional[OHLCV]:
+    """
+    Resolve market-data source per symbol: forex → OANDA when creds exist,
+    otherwise fall back to the configured primary broker (usually Polygon).
+    """
+    from config.execution_config import oanda_credentials_ready
+    from config.settings import get_settings
+
+    sym = symbol.upper()
+
+    if is_oanda_tradable(sym) and oanda_credentials_ready(get_settings()):
+        oanda = oanda_adapter or OandaBrokerAdapter()
+        bar = await oanda.fetch_latest_bar(sym, timeframe)
+        if bar is not None:
+            return bar
+        logger.warning(
+            "OandaBrokerAdapter[%s]: no valid bar — falling back to broker=%s",
+            sym,
+            broker,
+        )
+
+    primary = primary_adapter or get_broker_adapter(broker)
+    if primary.broker_id == "oanda":
+        return None
+    return await primary.fetch_latest_bar(sym, timeframe)
 
 
 _ADAPTERS: dict[str, type[BrokerAdapter]] = {
     "none": NullBrokerAdapter,
     "paper": PaperBrokerAdapter,
     "polygon": PolygonBrokerAdapter,
+    "oanda": OandaBrokerAdapter,
 }
 
 

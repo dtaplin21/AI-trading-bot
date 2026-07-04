@@ -144,6 +144,7 @@ class ChartWatchRunner:
         self._started_at: Optional[datetime] = None
         self._last_live_bar_ts: dict[str, datetime] = {}
         self._broker_adapter = None
+        self._oanda_market_adapter = None
         self._timescale: TimescaleStore | None = None
         self._timeseries: TimeseriesStore | None = None
         self._tick_loaders: list = []
@@ -243,7 +244,16 @@ class ChartWatchRunner:
 
     def _persist_bar(self, bar: OHLCV) -> None:
         """Upsert completed bar to ohlcv_candles (1m source bars only)."""
+        from pipeline.bar_validators import is_valid_bar_close
+
         if bar.timeframe != "1m":
+            return
+        if not is_valid_bar_close(bar.close):
+            logger.debug(
+                "ChartWatchRunner[%s]: skip persist — invalid close %.6f",
+                bar.symbol,
+                bar.close,
+            )
             return
         store = self._series_store()
         if not store.available:
@@ -560,6 +570,8 @@ class ChartWatchRunner:
                     continue
                 if not self._scheduler.is_trading(sym):
                     continue
+                if tick.price <= 0:
+                    continue
                 if tick_agg is None:
                     continue
                 completed = tick_agg.update(sym, tick.price, tick.size, tick.timestamp)
@@ -590,14 +602,25 @@ class ChartWatchRunner:
         await self._route_bar(bar)
 
     async def _fetch_live_candle(self, symbol: str, broker: str) -> Optional[OHLCV]:
-        adapter = self._broker_adapter
-        if adapter is None:
-            from live.broker_adapter import get_broker_adapter
+        from live.broker_adapter import (
+            OandaBrokerAdapter,
+            fetch_latest_bar_for_symbol,
+            get_broker_adapter,
+        )
 
-            adapter = get_broker_adapter(broker)
-            self._broker_adapter = adapter
+        if self._broker_adapter is None:
+            self._broker_adapter = get_broker_adapter(broker)
+        if self._oanda_market_adapter is None:
+            self._oanda_market_adapter = OandaBrokerAdapter()
+
         try:
-            return await adapter.fetch_latest_bar(symbol, "1m")
+            return await fetch_latest_bar_for_symbol(
+                symbol,
+                broker=broker,
+                timeframe="1m",
+                oanda_adapter=self._oanda_market_adapter,
+                primary_adapter=self._broker_adapter,
+            )
         except Exception as exc:
             logger.error(
                 "ChartWatchRunner[%s]: broker adapter failed (%s): %s",
@@ -609,6 +632,15 @@ class ChartWatchRunner:
             return None
 
     async def _route_bar(self, bar: OHLCV) -> None:
+        from pipeline.bar_validators import is_valid_bar_close
+
+        if not is_valid_bar_close(bar.close):
+            logger.debug(
+                "ChartWatchRunner[%s]: skip route — invalid close %.6f",
+                bar.symbol,
+                bar.close,
+            )
+            return
         asm = self._assembler.get(bar.symbol)
         if asm:
             await asm.on_candle(bar)

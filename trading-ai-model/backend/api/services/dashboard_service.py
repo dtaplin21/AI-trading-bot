@@ -200,10 +200,13 @@ def _enrich_from_db(charts: list[WatchedChart], db: TimescaleStore) -> list[Watc
                 df = db.load_ohlcv(chart.symbol, tf, limit=1)
                 if df is None or df.empty:
                     continue
+                close_val = float(df["close"].iloc[-1])
+                if close_val <= 0:
+                    continue
                 last_bar = cast(pd.Timestamp, df.index[-1]).to_pydatetime()
                 if last_bar.tzinfo is None:
                     last_bar = last_bar.replace(tzinfo=timezone.utc)
-                chart.last_price = float(df["close"].iloc[-1])
+                chart.last_price = close_val
                 chart.last_bar_at = last_bar.isoformat()
                 chart.bar_count = db.count_bars(chart.symbol, tf)
                 chart.is_active = True

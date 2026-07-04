@@ -238,9 +238,13 @@ class TickDataLoader:
         ev = msg.get("ev", "")
 
         if ev == "C":
+            bp = float(msg.get("bp", 0) or 0)
+            ap = float(msg.get("ap", 0) or 0)
+            if bp <= 0 or ap <= 0:
+                return None
             return Tick(
                 symbol=self._resolve_symbol(str(msg.get("p", ""))),
-                price=(float(msg.get("bp", 0)) + float(msg.get("ap", 0))) / 2,
+                price=(bp + ap) / 2,
                 size=float(msg.get("as", 0) or msg.get("bs", 0) or 0),
                 timestamp=msg.get("t", 0),
                 bid=msg.get("bp"),
@@ -248,17 +252,23 @@ class TickDataLoader:
             )
 
         if ev == "XT":
+            price = float(msg.get("p", 0) or 0)
+            if price <= 0:
+                return None
             return Tick(
                 symbol=self._resolve_symbol(str(msg.get("pair", ""))),
-                price=msg.get("p", 0),
+                price=price,
                 size=msg.get("s", 0),
                 timestamp=msg.get("t", 0),
             )
 
         if ev in ("T", "FT"):
+            price = float(msg.get("p", 0) or 0)
+            if price <= 0:
+                return None
             return Tick(
                 symbol=self._resolve_symbol(str(msg.get("sym", ""))),
-                price=msg.get("p", 0),
+                price=price,
                 size=msg.get("s", 0),
                 timestamp=msg.get("t", 0),
             )
