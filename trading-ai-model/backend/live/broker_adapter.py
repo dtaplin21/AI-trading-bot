@@ -7,12 +7,13 @@ Execution adapters (Tradovate, IBKR) are future work — this module feeds OHLCV
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
 
@@ -25,7 +26,6 @@ from pipeline.schemas import OHLCV
 logger = logging.getLogger(__name__)
 
 HTTP_TIMEOUT = 15.0
-COINBASE_API_BASE = "https://api.coinbase.com"
 
 _OANDA_GRANULARITY = {"1m": "M1", "5m": "M5", "15m": "M15", "1h": "H1"}
 _COINBASE_GRANULARITY = {
@@ -111,6 +111,37 @@ def parse_coinbase_candle(symbol: str, candle: dict, *, timeframe: str = "1m") -
     )
 
 
+def _coinbase_response_to_dict(obj: Any) -> dict[str, Any]:
+    if obj is None:
+        return {}
+    if isinstance(obj, dict):
+        return obj
+    if hasattr(obj, "to_dict"):
+        return obj.to_dict()
+    return dict(getattr(obj, "__dict__", {}) or {})
+
+
+def build_coinbase_rest_client(
+    *,
+    api_key: str | None = None,
+    api_secret: str | None = None,
+) -> Any | None:
+    """Build authenticated Coinbase Advanced Trade RESTClient (JWT)."""
+    from config.settings import get_settings
+
+    settings = get_settings()
+    key = (api_key if api_key is not None else settings.coinbase_api_key).strip()
+    secret_raw = api_secret if api_secret is not None else settings.coinbase_api_secret
+    secret = secret_raw.replace("\\n", "\n").strip()
+    if not key or not secret:
+        return None
+    try:
+        from coinbase.rest import RESTClient
+    except ImportError as exc:
+        raise ImportError("Run: pip install coinbase-advanced-py") from exc
+    return RESTClient(api_key=key, api_secret=secret)
+
+
 def _load_polygon_ticker_map() -> dict[str, str]:
     mapping = polygon_ticker_map()
     raw = os.getenv("POLYGON_FUTURES_TICKER_MAP", "").strip()
@@ -171,10 +202,17 @@ class PolygonBrokerAdapter(BrokerAdapter):
         return f"C:{sym}"
 
     async def fetch_latest_bar(self, symbol: str, timeframe: str = "1m") -> Optional[OHLCV]:
-        from config.execution_config import oanda_credentials_ready
+        from config.execution_config import coinbase_credentials_ready, oanda_credentials_ready
         from config.settings import get_settings
 
         sym = symbol.upper()
+        if is_coinbase_tradable(sym) and coinbase_credentials_ready(get_settings()):
+            logger.debug(
+                "PolygonBrokerAdapter[%s]: blocked — crypto uses Coinbase market data",
+                sym,
+            )
+            return None
+
         if is_oanda_tradable(sym) and oanda_credentials_ready(get_settings()):
             logger.debug(
                 "PolygonBrokerAdapter[%s]: blocked — forex uses OANDA market data",
@@ -276,12 +314,58 @@ class OandaBrokerAdapter(BrokerAdapter):
 
 
 class CoinbaseBrokerAdapter(BrokerAdapter):
-    """Coinbase Advanced Trade public candles — crypto M1 bars."""
+    """Coinbase Advanced Trade candles — crypto bars via JWT-authenticated REST."""
 
     broker_id = "coinbase"
 
-    def __init__(self, api_base: str = COINBASE_API_BASE) -> None:
-        self._api_base = api_base.rstrip("/")
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        api_secret: str | None = None,
+        client: Any | None = None,
+    ) -> None:
+        self._api_key = api_key
+        self._api_secret = api_secret
+        self._client = client
+
+    def _rest_client(self) -> Any | None:
+        if self._client is not None:
+            return self._client
+        return build_coinbase_rest_client(
+            api_key=self._api_key,
+            api_secret=self._api_secret,
+        )
+
+    async def _fetch_candles(
+        self,
+        product_id: str,
+        *,
+        start: datetime,
+        end: datetime,
+        granularity: str,
+        limit: int = 3,
+    ) -> list[dict]:
+        client = self._rest_client()
+        if client is None:
+            return []
+
+        start_s = str(int(start.timestamp()))
+        end_s = str(int(end.timestamp()))
+
+        def _fetch() -> list[dict]:
+            response = client.get_candles(
+                product_id,
+                start_s,
+                end_s,
+                granularity,
+                limit=limit,
+            )
+            payload = _coinbase_response_to_dict(response)
+            candles = payload.get("candles") or []
+            return candles if isinstance(candles, list) else []
+
+        return await asyncio.to_thread(_fetch)
 
     async def fetch_latest_bar(self, symbol: str, timeframe: str = "1m") -> Optional[OHLCV]:
         if not is_coinbase_tradable(symbol):
@@ -293,27 +377,26 @@ class CoinbaseBrokerAdapter(BrokerAdapter):
             logger.debug("CoinbaseBrokerAdapter[%s]: no product id mapping", symbol)
             return None
 
+        if self._rest_client() is None:
+            logger.warning("CoinbaseBrokerAdapter: COINBASE_API_KEY/COINBASE_API_SECRET not set")
+            return None
+
         granularity = _COINBASE_GRANULARITY.get(timeframe, "ONE_MINUTE")
         end = datetime.now(tz=timezone.utc)
         start = end - timedelta(minutes=5)
-        url = f"{self._api_base}/api/v3/brokerage/market/products/{product_id}/candles"
-        params = {
-            "start": str(int(start.timestamp())),
-            "end": str(int(end.timestamp())),
-            "granularity": granularity,
-            "limit": "3",
-        }
 
         try:
-            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-                response = await client.get(url, params=params)
-                response.raise_for_status()
-                payload = response.json()
-        except httpx.HTTPError as exc:
+            candles = await self._fetch_candles(
+                product_id,
+                start=start,
+                end=end,
+                granularity=granularity,
+                limit=3,
+            )
+        except Exception as exc:
             logger.warning("CoinbaseBrokerAdapter[%s] HTTP error: %s", symbol, exc)
             return None
 
-        candles = payload.get("candles") or []
         for candle in reversed(candles):
             bar = parse_coinbase_candle(symbol, candle, timeframe=timeframe)
             if bar is not None:

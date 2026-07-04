@@ -43,6 +43,8 @@ def resolve_market_data_broker_id(
     # Never route forex to Polygon when OANDA is configured (zero-close poison).
     if is_oanda_tradable(sym):
         return "none"
+    if is_coinbase_tradable(sym):
+        return "none"
     if os.getenv("POLYGON_API_KEY", "").strip():
         return "polygon"
     return "none"

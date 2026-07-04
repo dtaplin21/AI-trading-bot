@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -16,6 +16,15 @@ from live.broker_adapter import (
     parse_coinbase_candle,
     parse_oanda_candle,
 )
+
+
+@pytest.mark.asyncio
+async def test_polygon_blocks_crypto_when_coinbase_creds(monkeypatch):
+    monkeypatch.setenv("COINBASE_API_KEY", "organizations/test/key")
+    monkeypatch.setenv("COINBASE_API_SECRET", "secret")
+    adapter = PolygonBrokerAdapter(api_key="test-key")
+    bar = await adapter.fetch_latest_bar("BTCUSD")
+    assert bar is None
 
 
 @pytest.mark.asyncio
@@ -115,7 +124,6 @@ def test_parse_coinbase_candle_rejects_zero_close():
 
 @pytest.mark.asyncio
 async def test_coinbase_fetch_latest_bar():
-    adapter = CoinbaseBrokerAdapter()
     payload = {
         "candles": [
             {
@@ -129,23 +137,17 @@ async def test_coinbase_fetch_latest_bar():
         ]
     }
 
-    mock_response = AsyncMock()
-    mock_response.raise_for_status = lambda: None
-    mock_response.json = lambda: payload
+    mock_client = MagicMock()
+    mock_client.get_candles.return_value = payload
 
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(return_value=mock_response)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-
-    with patch("live.broker_adapter.httpx.AsyncClient", return_value=mock_client):
-        bar = await adapter.fetch_latest_bar("BTCUSD")
+    adapter = CoinbaseBrokerAdapter(client=mock_client)
+    bar = await adapter.fetch_latest_bar("BTCUSD")
 
     assert bar is not None
     assert bar.close == 62050.0
-    call_url = mock_client.get.call_args.args[0]
-    assert "BTC-USD" in call_url
-    assert "/market/products/" in call_url
+    mock_client.get_candles.assert_called_once()
+    assert mock_client.get_candles.call_args.args[0] == "BTC-USD"
+    assert mock_client.get_candles.call_args.args[3] == "ONE_MINUTE"
 
 
 def test_parse_oanda_candle():

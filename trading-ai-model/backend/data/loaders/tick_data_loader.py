@@ -362,14 +362,19 @@ def loaders_for_symbols(
 
     Forex pairs route to OandaForexTickLoader when OANDA_API_KEY is set — never
     Polygon forex (zero-close poison).
+
+    Crypto pairs route to CoinbaseCryptoTickLoader when Coinbase creds are set.
     """
-    from config.execution_config import oanda_credentials_ready
+    from config.execution_config import coinbase_credentials_ready, oanda_credentials_ready
+    from config.coinbase_symbols import is_coinbase_tradable
     from config.oanda_symbols import is_oanda_tradable
     from config.settings import get_settings
 
     settings = get_settings()
     oanda_forex = oanda_credentials_ready(settings)
+    coinbase_crypto = coinbase_credentials_ready(settings)
     oanda_forex_symbols: list[str] = []
+    coinbase_crypto_symbols: list[str] = []
 
     mapping = ticker_map or polygon_ticker_map()
     groups: dict[str, list[tuple[str, str]]] = defaultdict(list)
@@ -387,6 +392,9 @@ def loaders_for_symbols(
         )
         if asset_type == "forex" and oanda_forex and is_oanda_tradable(internal):
             oanda_forex_symbols.append(internal)
+            continue
+        if asset_type == "crypto" and coinbase_crypto and is_coinbase_tradable(internal):
+            coinbase_crypto_symbols.append(internal)
             continue
         groups[asset_type].append((internal, polygon))
 
@@ -418,5 +426,10 @@ def loaders_for_symbols(
         from data.loaders.oanda_forex_loader import OandaForexTickLoader
 
         loaders.append(OandaForexTickLoader(symbols=oanda_forex_symbols))
+
+    if coinbase_crypto_symbols:
+        from data.loaders.coinbase_crypto_loader import CoinbaseCryptoTickLoader
+
+        loaders.append(CoinbaseCryptoTickLoader(symbols=coinbase_crypto_symbols))
 
     return loaders

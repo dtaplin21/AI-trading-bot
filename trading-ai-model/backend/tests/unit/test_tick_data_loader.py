@@ -69,14 +69,14 @@ def test_parse_stock_trade():
 def test_loaders_for_symbols_groups_asset_classes(monkeypatch):
     from config.settings import Settings
 
-    empty_oanda = Settings.model_construct(
+    empty_settings = Settings.model_construct(
         oanda_api_key="",
         coinbase_api_key="",
         coinbase_api_secret="",
     )
     monkeypatch.setattr(
         "config.settings.get_settings",
-        lambda: empty_oanda,
+        lambda: empty_settings,
     )
 
     loaders = loaders_for_symbols(["EURUSD", "TSLA", "BTCUSD"])
@@ -107,6 +107,31 @@ def test_loaders_forex_uses_oanda_when_credentials_ready(monkeypatch):
     assert len(oanda_loaders) == 1
     assert oanda_loaders[0].symbols == ["EURUSD"]
     assert polygon_forex == []
+
+
+def test_loaders_crypto_uses_coinbase_when_credentials_ready(monkeypatch):
+    monkeypatch.setenv("COINBASE_API_KEY", "organizations/test/key")
+    monkeypatch.setenv("COINBASE_API_SECRET", "secret")
+    monkeypatch.setenv("POLYGON_API_KEY", "pk_test")
+    from config.settings import get_settings
+
+    get_settings.cache_clear()
+
+    from data.loaders.coinbase_crypto_loader import CoinbaseCryptoTickLoader
+
+    loaders = loaders_for_symbols(["BTCUSD", "TSLA"])
+    coinbase_loaders = [
+        loader for loader in loaders if isinstance(loader, CoinbaseCryptoTickLoader)
+    ]
+    polygon_crypto = [
+        loader
+        for loader in loaders
+        if getattr(loader, "asset_type", None) == "crypto"
+    ]
+
+    assert len(coinbase_loaders) == 1
+    assert coinbase_loaders[0].symbols == ["BTCUSD"]
+    assert polygon_crypto == []
 
 
 def test_subscribe_channel_formats_polygon_tickers():
