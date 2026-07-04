@@ -50,9 +50,15 @@ def oanda_api_base() -> str:
     return "https://api-fxpractice.oanda.com"
 
 
-def parse_oanda_candle(symbol: str, candle: dict, *, timeframe: str = "1m") -> Optional[OHLCV]:
+def parse_oanda_candle(
+    symbol: str,
+    candle: dict,
+    *,
+    timeframe: str = "1m",
+    allow_incomplete: bool = False,
+) -> Optional[OHLCV]:
     """Parse one OANDA v20 candle dict into OHLCV (mid price)."""
-    if not candle.get("complete", True):
+    if not allow_incomplete and not candle.get("complete", True):
         return None
     mid = candle.get("mid") or candle.get("bid") or candle.get("ask")
     if not mid:
@@ -165,6 +171,17 @@ class PolygonBrokerAdapter(BrokerAdapter):
         return f"C:{sym}"
 
     async def fetch_latest_bar(self, symbol: str, timeframe: str = "1m") -> Optional[OHLCV]:
+        from config.execution_config import oanda_credentials_ready
+        from config.settings import get_settings
+
+        sym = symbol.upper()
+        if is_oanda_tradable(sym) and oanda_credentials_ready(get_settings()):
+            logger.debug(
+                "PolygonBrokerAdapter[%s]: blocked — forex uses OANDA market data",
+                sym,
+            )
+            return None
+
         if timeframe != "1m":
             logger.debug("PolygonBrokerAdapter: only 1m supported in v1 (got %s)", timeframe)
         if not self._api_key:

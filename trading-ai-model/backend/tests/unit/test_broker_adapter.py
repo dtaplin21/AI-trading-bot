@@ -19,6 +19,14 @@ from live.broker_adapter import (
 
 
 @pytest.mark.asyncio
+async def test_polygon_blocks_forex_when_oanda_creds(monkeypatch):
+    monkeypatch.setenv("OANDA_API_KEY", "test-token")
+    adapter = PolygonBrokerAdapter(api_key="test-key")
+    bar = await adapter.fetch_latest_bar("EURUSD")
+    assert bar is None
+
+
+@pytest.mark.asyncio
 async def test_polygon_fetch_latest_bar():
     adapter = PolygonBrokerAdapter(
         api_key="test-key",
@@ -150,6 +158,26 @@ def test_parse_oanda_candle():
     bar = parse_oanda_candle("EURUSD", candle)
     assert bar is not None
     assert bar.symbol == "EURUSD"
+    assert bar.close == pytest.approx(1.08465)
+
+
+def test_parse_oanda_candle_rejects_incomplete_by_default():
+    candle = {
+        "complete": False,
+        "time": "2025-06-01T12:34:00.000000000Z",
+        "mid": {"o": "1.08450", "h": "1.08480", "l": "1.08440", "c": "1.08465"},
+    }
+    assert parse_oanda_candle("EURUSD", candle) is None
+
+
+def test_parse_oanda_candle_allow_incomplete():
+    candle = {
+        "complete": False,
+        "time": "2025-06-01T12:34:00.000000000Z",
+        "mid": {"o": "1.08450", "h": "1.08480", "l": "1.08440", "c": "1.08465"},
+    }
+    bar = parse_oanda_candle("EURUSD", candle, allow_incomplete=True)
+    assert bar is not None
     assert bar.close == pytest.approx(1.08465)
 
 

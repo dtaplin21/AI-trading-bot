@@ -83,6 +83,7 @@ class WatchedChart:
     execution_ready: bool = False
     watcher_bars_processed: int = 0
     watcher_last_bar_at: Optional[str] = None
+    market_data_source: Optional[str] = None
 
     @property
     def label(self) -> str:
@@ -115,6 +116,7 @@ class WatchedChart:
             "execution_ready": self.execution_ready,
             "watcher_bars_processed": self.watcher_bars_processed,
             "watcher_last_bar_at": self.watcher_last_bar_at,
+            "market_data_source": self.market_data_source,
             "pipeline_active": self.pipeline_running,
         }
 

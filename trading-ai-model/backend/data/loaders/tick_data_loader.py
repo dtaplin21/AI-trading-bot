@@ -19,7 +19,7 @@ import logging
 import os
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import AsyncGenerator, AsyncIterator, Optional
+from typing import AsyncGenerator, AsyncIterator, Optional, Protocol, runtime_checkable
 
 import httpx
 
@@ -90,6 +90,17 @@ class Tick:
 
     def __repr__(self):
         return f"Tick({self.symbol} @ {self.price} sz={self.size})"
+
+
+@runtime_checkable
+class TickLoader(Protocol):
+    """Common interface for live tick sources (Polygon WS, OANDA poll/stream, etc.)."""
+
+    symbols: list[str]
+
+    def stream(self) -> AsyncGenerator[Tick, None]: ...
+
+    def stop(self) -> None: ...
 
 
 class TickDataLoader:
@@ -345,10 +356,21 @@ def loaders_for_symbols(
     symbols: list[str],
     api_key: str | None = None,
     ticker_map: dict[str, str] | None = None,
-) -> list[TickDataLoader]:
+) -> list[TickLoader]:
     """
-    Build one WebSocket loader per asset class for the given internal symbols.
+    Build tick loaders per asset class for the given internal symbols.
+
+    Forex pairs route to OandaForexTickLoader when OANDA_API_KEY is set — never
+    Polygon forex (zero-close poison).
     """
+    from config.execution_config import oanda_credentials_ready
+    from config.oanda_symbols import is_oanda_tradable
+    from config.settings import get_settings
+
+    settings = get_settings()
+    oanda_forex = oanda_credentials_ready(settings)
+    oanda_forex_symbols: list[str] = []
+
     mapping = ticker_map or polygon_ticker_map()
     groups: dict[str, list[tuple[str, str]]] = defaultdict(list)
 
@@ -363,10 +385,15 @@ def loaders_for_symbols(
             spec.asset_class if spec else "equity",
             "stocks",
         )
+        if asset_type == "forex" and oanda_forex and is_oanda_tradable(internal):
+            oanda_forex_symbols.append(internal)
+            continue
         groups[asset_type].append((internal, polygon))
 
-    loaders: list[TickDataLoader] = []
+    loaders: list[TickLoader] = []
     for asset_type, pairs in groups.items():
+        if not pairs:
+            continue
         symbol_map = {polygon: internal for internal, polygon in pairs}
         for internal, polygon in pairs:
             body = polygon.split(":", 1)[-1] if ":" in polygon else polygon
@@ -386,4 +413,10 @@ def loaders_for_symbols(
                 symbol_map=symbol_map,
             )
         )
+
+    if oanda_forex_symbols:
+        from data.loaders.oanda_forex_loader import OandaForexTickLoader
+
+        loaders.append(OandaForexTickLoader(symbols=oanda_forex_symbols))
+
     return loaders

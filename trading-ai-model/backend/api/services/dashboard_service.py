@@ -175,6 +175,7 @@ def _enrich_from_watcher_runtime(charts: list[WatchedChart]) -> list[WatchedChar
         kill_switch = get_kill_switch_status()["enabled"]
     bars_processed = (watcher_status or {}).get("bars_processed") or {}
     symbol_last_bar = (watcher_status or {}).get("symbol_last_bar") or {}
+    symbol_market_data_source = (watcher_status or {}).get("symbol_market_data_source") or {}
 
     for chart in charts:
         sym = chart.symbol.upper()
@@ -187,6 +188,8 @@ def _enrich_from_watcher_runtime(charts: list[WatchedChart]) -> list[WatchedChar
         chart.watcher_bars_processed = int(bars_processed.get(sym) or bars_processed.get(chart.symbol) or 0)
         raw_last = symbol_last_bar.get(sym) or symbol_last_bar.get(chart.symbol)
         chart.watcher_last_bar_at = raw_last if isinstance(raw_last, str) else None
+        raw_source = symbol_market_data_source.get(sym) or symbol_market_data_source.get(chart.symbol)
+        chart.market_data_source = raw_source if isinstance(raw_source, str) else None
         chart.execution_ready = _symbol_execution_ready(chart, kill_switch=kill_switch)
 
     return charts

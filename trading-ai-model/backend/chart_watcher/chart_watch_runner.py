@@ -150,6 +150,8 @@ class ChartWatchRunner:
         self._tick_aggregator = None
         self._symbol_last_bar: dict[str, str] = {}
         self._symbol_last_feed_at: dict[str, str] = {}
+        self._symbol_market_data_source: dict[str, str] = {}
+        self._logged_market_data_source: set[str] = set()
         self._last_heartbeat_write: float = 0.0
 
         logger.info(
@@ -571,6 +573,7 @@ class ChartWatchRunner:
                     continue
                 if tick.price <= 0:
                     continue
+                self._record_market_data_source(sym)
                 if tick_agg is None:
                     continue
                 completed = tick_agg.update(sym, tick.price, tick.size, tick.timestamp)
@@ -590,6 +593,7 @@ class ChartWatchRunner:
                 loader.stop()
 
     async def _poll_symbol(self, symbol: str, broker: str) -> None:
+        self._record_market_data_source(symbol)
         bar = await self._fetch_live_candle(symbol, broker)
         if not bar:
             return
@@ -614,6 +618,24 @@ class ChartWatchRunner:
                 exc_info=True,
             )
             return None
+
+    def _record_market_data_source(self, symbol: str) -> None:
+        from live.market_data_router import resolve_market_data_broker_id
+
+        sym = symbol.upper()
+        source = resolve_market_data_broker_id(sym)
+        prev = self._symbol_market_data_source.get(sym)
+        self._symbol_market_data_source[sym] = source
+        if sym not in self._logged_market_data_source:
+            self._logged_market_data_source.add(sym)
+            logger.info("ChartWatchRunner[%s]: market_data_source=%s", sym, source)
+        elif prev != source:
+            logger.info(
+                "ChartWatchRunner[%s]: market_data_source=%s (was %s)",
+                sym,
+                source,
+                prev,
+            )
 
     async def _route_bar(self, bar: OHLCV) -> None:
         from pipeline.bar_validators import is_valid_bar_close
@@ -772,6 +794,7 @@ class ChartWatchRunner:
                 "bars_processed": dict(self._bars_processed),
                 "symbol_last_bar": dict(self._symbol_last_bar),
                 "symbol_last_feed_at": dict(self._symbol_last_feed_at),
+                "symbol_market_data_source": dict(self._symbol_market_data_source),
                 "kill_switch": is_kill_switch_active(),
             }
         )

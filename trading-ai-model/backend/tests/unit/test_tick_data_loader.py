@@ -66,11 +66,47 @@ def test_parse_stock_trade():
     assert abs(tick.price - 250.5) < 1e-6
 
 
-def test_loaders_for_symbols_groups_asset_classes():
+def test_loaders_for_symbols_groups_asset_classes(monkeypatch):
+    from config.settings import Settings
+
+    empty_oanda = Settings.model_construct(
+        oanda_api_key="",
+        coinbase_api_key="",
+        coinbase_api_secret="",
+    )
+    monkeypatch.setattr(
+        "config.settings.get_settings",
+        lambda: empty_oanda,
+    )
+
     loaders = loaders_for_symbols(["EURUSD", "TSLA", "BTCUSD"])
-    asset_types = {loader.asset_type for loader in loaders}
-    assert asset_types == {"forex", "stocks", "crypto"}
+    asset_types = {getattr(loader, "asset_type", None) for loader in loaders}
+    assert "forex" in asset_types
+    assert "stocks" in asset_types
+    assert "crypto" in asset_types
     assert sum(len(loader.symbols) for loader in loaders) == 3
+
+
+def test_loaders_forex_uses_oanda_when_credentials_ready(monkeypatch):
+    monkeypatch.setenv("OANDA_API_KEY", "test-token")
+    monkeypatch.setenv("POLYGON_API_KEY", "pk_test")
+    from config.settings import get_settings
+
+    get_settings.cache_clear()
+
+    from data.loaders.oanda_forex_loader import OandaForexTickLoader
+
+    loaders = loaders_for_symbols(["EURUSD", "TSLA"])
+    oanda_loaders = [loader for loader in loaders if isinstance(loader, OandaForexTickLoader)]
+    polygon_forex = [
+        loader
+        for loader in loaders
+        if getattr(loader, "asset_type", None) == "forex"
+    ]
+
+    assert len(oanda_loaders) == 1
+    assert oanda_loaders[0].symbols == ["EURUSD"]
+    assert polygon_forex == []
 
 
 def test_subscribe_channel_formats_polygon_tickers():

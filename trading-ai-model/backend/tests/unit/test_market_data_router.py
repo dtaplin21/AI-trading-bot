@@ -72,3 +72,17 @@ def test_forex_prefers_oanda_over_polygon(monkeypatch):
     monkeypatch.setenv("POLYGON_API_KEY", "pk_test")
 
     assert resolve_market_data_broker_id("GBPUSD") == "oanda"
+
+
+def test_forex_without_oanda_key_blocks_polygon(monkeypatch):
+    monkeypatch.setenv("POLYGON_API_KEY", "pk_test")
+    from config.settings import Settings
+
+    settings = Settings.model_construct(
+        oanda_api_key="",
+        coinbase_api_key="",
+        coinbase_api_secret="",
+    )
+
+    assert resolve_market_data_broker_id("EURUSD", settings=settings) == "none"
+    assert resolve_market_data_adapter("EURUSD", settings=settings).broker_id == "none"
