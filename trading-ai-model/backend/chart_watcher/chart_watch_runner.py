@@ -144,7 +144,6 @@ class ChartWatchRunner:
         self._started_at: Optional[datetime] = None
         self._last_live_bar_ts: dict[str, datetime] = {}
         self._broker_adapter = None
-        self._oanda_market_adapter = None
         self._timescale: TimescaleStore | None = None
         self._timeseries: TimeseriesStore | None = None
         self._tick_loaders: list = []
@@ -602,25 +601,10 @@ class ChartWatchRunner:
         await self._route_bar(bar)
 
     async def _fetch_live_candle(self, symbol: str, broker: str) -> Optional[OHLCV]:
-        from live.broker_adapter import (
-            OandaBrokerAdapter,
-            fetch_latest_bar_for_symbol,
-            get_broker_adapter,
-        )
-
-        if self._broker_adapter is None:
-            self._broker_adapter = get_broker_adapter(broker)
-        if self._oanda_market_adapter is None:
-            self._oanda_market_adapter = OandaBrokerAdapter()
+        from live.broker_adapter import fetch_latest_bar_for_symbol
 
         try:
-            return await fetch_latest_bar_for_symbol(
-                symbol,
-                broker=broker,
-                timeframe="1m",
-                oanda_adapter=self._oanda_market_adapter,
-                primary_adapter=self._broker_adapter,
-            )
+            return await fetch_latest_bar_for_symbol(symbol, broker=broker, timeframe="1m")
         except Exception as exc:
             logger.error(
                 "ChartWatchRunner[%s]: broker adapter failed (%s): %s",

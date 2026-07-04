@@ -11,11 +11,12 @@ import json
 import logging
 import os
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
 
+from config.coinbase_symbols import is_coinbase_tradable, to_product_id
 from config.oanda_symbols import is_oanda_tradable, to_instrument
 from config.symbols import get_symbol_or_none, massive_symbol, polygon_ticker_map
 from pipeline.bar_validators import is_valid_bar_close
@@ -24,8 +25,15 @@ from pipeline.schemas import OHLCV
 logger = logging.getLogger(__name__)
 
 HTTP_TIMEOUT = 15.0
+COINBASE_API_BASE = "https://api.coinbase.com"
 
 _OANDA_GRANULARITY = {"1m": "M1", "5m": "M5", "15m": "M15", "1h": "H1"}
+_COINBASE_GRANULARITY = {
+    "1m": "ONE_MINUTE",
+    "5m": "FIVE_MINUTE",
+    "15m": "FIFTEEN_MINUTE",
+    "1h": "ONE_HOUR",
+}
 
 
 def oanda_api_key() -> str:
@@ -61,6 +69,30 @@ def parse_oanda_candle(symbol: str, candle: dict, *, timeframe: str = "1m") -> O
     open_ = float(mid.get("o", close))
     high = float(mid.get("h", close))
     low = float(mid.get("l", close))
+    return OHLCV(
+        symbol=symbol.upper(),
+        timeframe=timeframe,
+        timestamp=ts,
+        open=open_,
+        high=high,
+        low=low,
+        close=close,
+        volume=float(candle.get("volume", 0)),
+    )
+
+
+def parse_coinbase_candle(symbol: str, candle: dict, *, timeframe: str = "1m") -> Optional[OHLCV]:
+    """Parse one Coinbase Advanced Trade candle dict into OHLCV."""
+    close = float(candle.get("close", 0))
+    if not is_valid_bar_close(close):
+        return None
+    start_raw = candle.get("start")
+    if start_raw is None:
+        return None
+    ts = datetime.fromtimestamp(int(start_raw), tz=timezone.utc)
+    open_ = float(candle.get("open", close))
+    high = float(candle.get("high", close))
+    low = float(candle.get("low", close))
     return OHLCV(
         symbol=symbol.upper(),
         timeframe=timeframe,
@@ -226,38 +258,78 @@ class OandaBrokerAdapter(BrokerAdapter):
         return None
 
 
+class CoinbaseBrokerAdapter(BrokerAdapter):
+    """Coinbase Advanced Trade public candles — crypto M1 bars."""
+
+    broker_id = "coinbase"
+
+    def __init__(self, api_base: str = COINBASE_API_BASE) -> None:
+        self._api_base = api_base.rstrip("/")
+
+    async def fetch_latest_bar(self, symbol: str, timeframe: str = "1m") -> Optional[OHLCV]:
+        if not is_coinbase_tradable(symbol):
+            logger.debug("CoinbaseBrokerAdapter[%s]: not a tradable crypto symbol", symbol)
+            return None
+
+        product_id = to_product_id(symbol)
+        if product_id is None:
+            logger.debug("CoinbaseBrokerAdapter[%s]: no product id mapping", symbol)
+            return None
+
+        granularity = _COINBASE_GRANULARITY.get(timeframe, "ONE_MINUTE")
+        end = datetime.now(tz=timezone.utc)
+        start = end - timedelta(minutes=5)
+        url = f"{self._api_base}/api/v3/brokerage/market/products/{product_id}/candles"
+        params = {
+            "start": str(int(start.timestamp())),
+            "end": str(int(end.timestamp())),
+            "granularity": granularity,
+            "limit": "3",
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+                response = await client.get(url, params=params)
+                response.raise_for_status()
+                payload = response.json()
+        except httpx.HTTPError as exc:
+            logger.warning("CoinbaseBrokerAdapter[%s] HTTP error: %s", symbol, exc)
+            return None
+
+        candles = payload.get("candles") or []
+        for candle in reversed(candles):
+            bar = parse_coinbase_candle(symbol, candle, timeframe=timeframe)
+            if bar is not None:
+                return bar
+
+        logger.debug(
+            "CoinbaseBrokerAdapter[%s]: no valid candle (product=%s)",
+            symbol,
+            product_id,
+        )
+        return None
+
+
 async def fetch_latest_bar_for_symbol(
     symbol: str,
     *,
     broker: str = "polygon",
     timeframe: str = "1m",
-    oanda_adapter: OandaBrokerAdapter | None = None,
-    primary_adapter: BrokerAdapter | None = None,
+    adapter: BrokerAdapter | None = None,
 ) -> Optional[OHLCV]:
     """
-    Resolve market-data source per symbol: forex → OANDA when creds exist,
-    otherwise fall back to the configured primary broker (usually Polygon).
+    Fetch the latest bar using resolve_market_data_adapter(symbol).
+
+    ``broker`` is retained for backward compatibility (default worker broker label only).
+    Pass ``adapter`` to override routing in tests.
     """
-    from config.execution_config import oanda_credentials_ready
-    from config.settings import get_settings
+    from live.market_data_router import resolve_market_data_adapter
 
     sym = symbol.upper()
-
-    if is_oanda_tradable(sym) and oanda_credentials_ready(get_settings()):
-        oanda = oanda_adapter or OandaBrokerAdapter()
-        bar = await oanda.fetch_latest_bar(sym, timeframe)
-        if bar is not None:
-            return bar
-        logger.warning(
-            "OandaBrokerAdapter[%s]: no valid bar — falling back to broker=%s",
-            sym,
-            broker,
-        )
-
-    primary = primary_adapter or get_broker_adapter(broker)
-    if primary.broker_id == "oanda":
+    market = adapter or resolve_market_data_adapter(sym)
+    if market.broker_id == "none":
         return None
-    return await primary.fetch_latest_bar(sym, timeframe)
+    return await market.fetch_latest_bar(sym, timeframe)
 
 
 _ADAPTERS: dict[str, type[BrokerAdapter]] = {
@@ -265,6 +337,7 @@ _ADAPTERS: dict[str, type[BrokerAdapter]] = {
     "paper": PaperBrokerAdapter,
     "polygon": PolygonBrokerAdapter,
     "oanda": OandaBrokerAdapter,
+    "coinbase": CoinbaseBrokerAdapter,
 }
 
 

@@ -7,11 +7,13 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from live.broker_adapter import (
+    CoinbaseBrokerAdapter,
     OandaBrokerAdapter,
     PolygonBrokerAdapter,
     default_worker_broker,
     fetch_latest_bar_for_symbol,
     get_broker_adapter,
+    parse_coinbase_candle,
     parse_oanda_candle,
 )
 
@@ -68,6 +70,74 @@ def test_get_broker_adapter_polygon():
 def test_get_broker_adapter_oanda():
     adapter = get_broker_adapter("oanda")
     assert adapter.broker_id == "oanda"
+
+
+def test_get_broker_adapter_coinbase():
+    adapter = get_broker_adapter("coinbase")
+    assert adapter.broker_id == "coinbase"
+    assert isinstance(adapter, CoinbaseBrokerAdapter)
+
+
+def test_parse_coinbase_candle():
+    candle = {
+        "start": "1705000000",
+        "open": "62000.0",
+        "high": "62100.0",
+        "low": "61900.0",
+        "close": "62050.0",
+        "volume": "12.5",
+    }
+    bar = parse_coinbase_candle("BTCUSD", candle)
+    assert bar is not None
+    assert bar.symbol == "BTCUSD"
+    assert bar.close == 62050.0
+
+
+def test_parse_coinbase_candle_rejects_zero_close():
+    candle = {
+        "start": "1705000000",
+        "open": "0",
+        "high": "0",
+        "low": "0",
+        "close": "0",
+        "volume": "0",
+    }
+    assert parse_coinbase_candle("BTCUSD", candle) is None
+
+
+@pytest.mark.asyncio
+async def test_coinbase_fetch_latest_bar():
+    adapter = CoinbaseBrokerAdapter()
+    payload = {
+        "candles": [
+            {
+                "start": "1705000000",
+                "open": "62000",
+                "high": "62100",
+                "low": "61900",
+                "close": "62050",
+                "volume": "10",
+            }
+        ]
+    }
+
+    mock_response = AsyncMock()
+    mock_response.raise_for_status = lambda: None
+    mock_response.json = lambda: payload
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("live.broker_adapter.httpx.AsyncClient", return_value=mock_client):
+        bar = await adapter.fetch_latest_bar("BTCUSD")
+
+    assert bar is not None
+    assert bar.close == 62050.0
+    call_url = mock_client.get.call_args.args[0]
+    assert "BTC-USD" in call_url
+    assert "/market/products/" in call_url
 
 
 def test_parse_oanda_candle():
@@ -131,10 +201,13 @@ async def test_oanda_fetch_latest_bar():
 
 
 @pytest.mark.asyncio
-async def test_fetch_latest_bar_for_symbol_prefers_oanda_for_forex(monkeypatch):
+async def test_fetch_latest_bar_for_symbol_uses_router(monkeypatch):
     monkeypatch.setenv("OANDA_API_KEY", "test-token")
-    oanda_bar = AsyncMock()
-    oanda_bar.fetch_latest_bar = AsyncMock(
+    monkeypatch.setenv("POLYGON_API_KEY", "pk_test")
+
+    mock_oanda = AsyncMock(spec=OandaBrokerAdapter)
+    mock_oanda.broker_id = "oanda"
+    mock_oanda.fetch_latest_bar = AsyncMock(
         return_value=type(
             "Bar",
             (),
@@ -150,20 +223,11 @@ async def test_fetch_latest_bar_for_symbol_prefers_oanda_for_forex(monkeypatch):
             },
         )()
     )
-    polygon = AsyncMock()
-    polygon.broker_id = "polygon"
-    polygon.fetch_latest_bar = AsyncMock(return_value=None)
 
-    bar = await fetch_latest_bar_for_symbol(
-        "EURUSD",
-        broker="polygon",
-        oanda_adapter=oanda_bar,
-        primary_adapter=polygon,
-    )
+    bar = await fetch_latest_bar_for_symbol("EURUSD", adapter=mock_oanda)
     assert bar is not None
     assert bar.close == pytest.approx(1.0845)
-    oanda_bar.fetch_latest_bar.assert_awaited_once()
-    polygon.fetch_latest_bar.assert_not_awaited()
+    mock_oanda.fetch_latest_bar.assert_awaited_once_with("EURUSD", "1m")
 
 
 def test_default_worker_broker_prefers_polygon(monkeypatch):
