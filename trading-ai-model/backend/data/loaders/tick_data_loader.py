@@ -352,53 +352,29 @@ class TickDataLoader:
         return False
 
 
-def loaders_for_symbols(
+def _polygon_tick_loaders(
     symbols: list[str],
-    api_key: str | None = None,
-    ticker_map: dict[str, str] | None = None,
-) -> list[TickLoader]:
-    """
-    Build tick loaders per asset class for the given internal symbols.
-
-    Forex pairs route to OandaForexTickLoader when OANDA_API_KEY is set — never
-    Polygon forex (zero-close poison).
-
-    Crypto pairs route to CoinbaseCryptoTickLoader when Coinbase creds are set.
-    """
-    from config.execution_config import coinbase_credentials_ready, oanda_credentials_ready
-    from config.coinbase_symbols import is_coinbase_tradable
-    from config.oanda_symbols import is_oanda_tradable
-    from config.settings import get_settings
-
-    settings = get_settings()
-    oanda_forex = oanda_credentials_ready(settings)
-    coinbase_crypto = coinbase_credentials_ready(settings)
-    oanda_forex_symbols: list[str] = []
-    coinbase_crypto_symbols: list[str] = []
-
+    api_key: str | None,
+    ticker_map: dict[str, str] | None,
+) -> list[TickDataLoader]:
+    """One Polygon WebSocket loader per asset class (futures/equities only in practice)."""
     mapping = ticker_map or polygon_ticker_map()
     groups: dict[str, list[tuple[str, str]]] = defaultdict(list)
 
-    for sym in symbols:
-        internal = sym.upper()
-        polygon = mapping.get(internal)
+    for internal in symbols:
+        sym = internal.upper()
+        polygon = mapping.get(sym)
         if not polygon:
-            spec = get_symbol_or_none(internal)
-            polygon = massive_symbol(internal) if spec else internal
-        spec = get_symbol_or_none(internal)
+            spec = get_symbol_or_none(sym)
+            polygon = massive_symbol(sym) if spec else sym
+        spec = get_symbol_or_none(sym)
         asset_type = _ASSET_CLASS_TO_WS.get(
             spec.asset_class if spec else "equity",
             "stocks",
         )
-        if asset_type == "forex" and oanda_forex and is_oanda_tradable(internal):
-            oanda_forex_symbols.append(internal)
-            continue
-        if asset_type == "crypto" and coinbase_crypto and is_coinbase_tradable(internal):
-            coinbase_crypto_symbols.append(internal)
-            continue
-        groups[asset_type].append((internal, polygon))
+        groups[asset_type].append((sym, polygon))
 
-    loaders: list[TickLoader] = []
+    loaders: list[TickDataLoader] = []
     for asset_type, pairs in groups.items():
         if not pairs:
             continue
@@ -421,15 +397,72 @@ def loaders_for_symbols(
                 symbol_map=symbol_map,
             )
         )
+    return loaders
 
-    if oanda_forex_symbols:
-        from data.loaders.oanda_forex_loader import OandaForexTickLoader
 
-        loaders.append(OandaForexTickLoader(symbols=oanda_forex_symbols))
+def loaders_for_symbols(
+    symbols: list[str],
+    api_key: str | None = None,
+    ticker_map: dict[str, str] | None = None,
+) -> list[TickLoader]:
+    """
+    Build tick loaders split by MARKET_DATA_PRIMARY routing.
 
-    if coinbase_crypto_symbols:
+    Coinbase → crypto only (poll/stream via CoinbaseCryptoTickLoader).
+    OANDA    → forex only (poll/pricing stream via OandaForexTickLoader).
+    Polygon  → futures/equities (and crypto/forex only when not demoted).
+    """
+    from live.market_data_router import resolve_market_data_broker_id
+
+    broker_groups: dict[str, list[str]] = defaultdict(list)
+    for sym in symbols:
+        internal = sym.upper()
+        broker_id = resolve_market_data_broker_id(internal)
+        if broker_id == "none":
+            logger.warning(
+                "TickDataLoader: no market-data source for %s — skipped "
+                "(check MARKET_DATA_PRIMARY and broker credentials)",
+                internal,
+            )
+            continue
+        broker_groups[broker_id].append(internal)
+
+    loaders: list[TickLoader] = []
+
+    if broker_groups["coinbase"]:
         from data.loaders.coinbase_crypto_loader import CoinbaseCryptoTickLoader
 
-        loaders.append(CoinbaseCryptoTickLoader(symbols=coinbase_crypto_symbols))
+        coinbase_syms = broker_groups["coinbase"]
+        loaders.append(CoinbaseCryptoTickLoader(symbols=coinbase_syms))
+        logger.info(
+            "TickDataLoader: coinbase → %d crypto symbol(s): %s",
+            len(coinbase_syms),
+            ",".join(coinbase_syms),
+        )
+
+    if broker_groups["oanda"]:
+        from data.loaders.oanda_forex_loader import OandaForexTickLoader
+
+        oanda_syms = broker_groups["oanda"]
+        loaders.append(OandaForexTickLoader(symbols=oanda_syms))
+        logger.info(
+            "TickDataLoader: oanda → %d forex symbol(s): %s",
+            len(oanda_syms),
+            ",".join(oanda_syms),
+        )
+
+    if broker_groups["polygon"]:
+        polygon_syms = broker_groups["polygon"]
+        polygon_loaders = _polygon_tick_loaders(polygon_syms, api_key, ticker_map)
+        loaders.extend(polygon_loaders)
+        by_class = {
+            getattr(loader, "asset_type", "?"): len(loader.symbols)
+            for loader in polygon_loaders
+        }
+        logger.info(
+            "TickDataLoader: polygon → %d symbol(s) %s",
+            len(polygon_syms),
+            by_class,
+        )
 
     return loaders

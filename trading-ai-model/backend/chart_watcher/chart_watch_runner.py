@@ -21,6 +21,8 @@ Env vars:
   WATCHER_REPLAY_DB_LIMIT   max bars per symbol from Timescale (default 500000)
   WATCHER_BAR_INTERVAL   seconds between candle polls in live mode (default 60)
   TICK_STREAM_MODE       broker | websocket | rest — live data source (default broker)
+  MARKET_DATA_PRIMARY    coinbase,oanda,polygon — tick/bar source order; demotes Polygon
+                         forex/crypto when coinbase/oanda precede polygon
   WATCHER_LOG_BARS       true|false — log every bar received (default false)
 """
 from __future__ import annotations
@@ -544,7 +546,7 @@ class ChartWatchRunner:
             await asyncio.sleep(BAR_INTERVAL)
 
     async def _run_live_ticks(self, tick_mode: str) -> None:
-        """Live mode via Polygon tick stream → TickAggregator → pipeline."""
+        """Live mode via split tick loaders (Coinbase/OANDA/Polygon) → TickAggregator → pipeline."""
         from data.loaders.tick_data_loader import loaders_for_symbols
         from data.processors.tick_aggregator import MultiSymbolAggregator, bar_dict_to_ohlcv
 

@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     api_port: int = 8000
 
     market_data_provider: str = ""
+    # Comma-separated tick/bar source order: coinbase,oanda,polygon (default)
+    market_data_primary: str = "coinbase,oanda,polygon"
     database_url: str = ""
     influxdb_url: str = ""
     influxdb_token: str = ""

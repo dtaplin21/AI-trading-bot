@@ -73,11 +73,14 @@ def test_loaders_for_symbols_groups_asset_classes(monkeypatch):
         oanda_api_key="",
         coinbase_api_key="",
         coinbase_api_secret="",
+        polygon_api_key="pk_test",
+        market_data_primary="polygon",
     )
     monkeypatch.setattr(
-        "config.settings.get_settings",
+        "live.market_data_router.get_settings",
         lambda: empty_settings,
     )
+    monkeypatch.setenv("POLYGON_API_KEY", "pk_test")
 
     loaders = loaders_for_symbols(["EURUSD", "TSLA", "BTCUSD"])
     asset_types = {getattr(loader, "asset_type", None) for loader in loaders}
@@ -85,6 +88,53 @@ def test_loaders_for_symbols_groups_asset_classes(monkeypatch):
     assert "stocks" in asset_types
     assert "crypto" in asset_types
     assert sum(len(loader.symbols) for loader in loaders) == 3
+
+
+def test_loaders_demotes_polygon_crypto_forex_by_default(monkeypatch):
+    """Default primary skips crypto/forex when broker creds are missing."""
+    from config.settings import Settings
+
+    empty_settings = Settings.model_construct(
+        oanda_api_key="",
+        coinbase_api_key="",
+        coinbase_api_secret="",
+        polygon_api_key="pk_test",
+    )
+    monkeypatch.setattr(
+        "live.market_data_router.get_settings",
+        lambda: empty_settings,
+    )
+    monkeypatch.setenv("POLYGON_API_KEY", "pk_test")
+
+    loaders = loaders_for_symbols(["EURUSD", "BTCUSD", "MES"])
+    polygon_loaders = [
+        loader for loader in loaders if getattr(loader, "asset_type", None) == "futures"
+    ]
+    assert len(polygon_loaders) == 1
+    assert polygon_loaders[0].symbols  # MES mapped to polygon ticker
+    assert not any(getattr(loader, "asset_type", None) == "forex" for loader in loaders)
+    assert not any(getattr(loader, "asset_type", None) == "crypto" for loader in loaders)
+
+
+def test_loaders_mixed_routing_with_credentials(monkeypatch):
+    monkeypatch.setenv("COINBASE_API_KEY", "organizations/test/key")
+    monkeypatch.setenv("COINBASE_API_SECRET", "secret")
+    monkeypatch.setenv("OANDA_API_KEY", "test-token")
+    monkeypatch.setenv("POLYGON_API_KEY", "pk_test")
+    from config.settings import get_settings
+
+    get_settings.cache_clear()
+
+    from data.loaders.coinbase_crypto_loader import CoinbaseCryptoTickLoader
+    from data.loaders.oanda_forex_loader import OandaForexTickLoader
+
+    loaders = loaders_for_symbols(["BTCUSD", "EURUSD", "MES", "TSLA"])
+    assert any(isinstance(loader, CoinbaseCryptoTickLoader) for loader in loaders)
+    assert any(isinstance(loader, OandaForexTickLoader) for loader in loaders)
+    polygon_types = {getattr(loader, "asset_type") for loader in loaders if isinstance(loader, TickDataLoader)}
+    assert polygon_types == {"futures", "stocks"}
+    assert not any(getattr(loader, "asset_type", None) == "crypto" for loader in loaders)
+    assert not any(getattr(loader, "asset_type", None) == "forex" for loader in loaders)
 
 
 def test_loaders_forex_uses_oanda_when_credentials_ready(monkeypatch):

@@ -53,6 +53,7 @@ from config.watchlist import (
     watcher_symbols_from_env,
 )
 from config.symbols import SYMBOL_MAP
+from live.market_data_router import build_market_data_feed_summary
 from data.storage.pg_connect import is_database_url_placeholder
 from data.storage.timescale_store import TimescaleStore
 from paper_trading.position_book import get_position_book
@@ -236,6 +237,7 @@ def build_kill_switch_payload() -> dict[str, Any]:
 
 def build_system_status() -> dict[str, Any]:
     """System health summary for the dashboard status panel."""
+    settings = get_settings()
     return {
         "paper_mode": os.getenv("PAPER_TRADING_ENABLED", "true"),
         "kill_switch": build_kill_switch_payload(),
@@ -248,6 +250,7 @@ def build_system_status() -> dict[str, Any]:
         "news_enabled": bool(
             os.getenv("NEWS_ENABLED", "true").lower() in ("true", "1", "yes")
         ),
+        "market_data_feeds": build_market_data_feed_summary(settings),
     }
 
 
@@ -325,6 +328,7 @@ def _build_core_dashboard(watched_objs: list[WatchedChart]) -> dict[str, Any]:
         "execution_mode": resolve_execution_mode(settings),
         "coinbase_live_ready": coinbase_live_allowed(settings),
         "oanda_live_ready": oanda_live_allowed(settings),
+        "market_data_feeds": build_market_data_feed_summary(settings),
         "order_sizing": get_order_sizing(),
         "risk_limits": get_risk_engine().risk_summary(),
         "active_broker": active_broker,

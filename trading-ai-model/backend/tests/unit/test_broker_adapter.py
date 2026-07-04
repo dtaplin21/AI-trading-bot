@@ -122,6 +122,89 @@ def test_parse_coinbase_candle_rejects_zero_close():
     assert parse_coinbase_candle("BTCUSD", candle) is None
 
 
+def test_parse_coinbase_candle_rejects_missing_start():
+    candle = {
+        "open": "62000",
+        "high": "62100",
+        "low": "61900",
+        "close": "62050",
+        "volume": "10",
+    }
+    assert parse_coinbase_candle("BTCUSD", candle) is None
+
+
+def test_parse_coinbase_candle_rejects_negative_close():
+    candle = {
+        "start": "1705000000",
+        "open": "-1",
+        "high": "0",
+        "low": "-2",
+        "close": "-100",
+        "volume": "0",
+    }
+    assert parse_coinbase_candle("BTCUSD", candle) is None
+
+
+@pytest.mark.asyncio
+async def test_polygon_rejects_zero_close_bar():
+    adapter = PolygonBrokerAdapter(
+        api_key="test-key",
+        ticker_map={"MES": "C:MES"},
+    )
+    payload = {
+        "results": [
+            {
+                "T": 1_705_000_000_000,
+                "o": 0.0,
+                "h": 0.0,
+                "l": 0.0,
+                "c": 0.0,
+                "v": 0,
+            }
+        ]
+    }
+
+    mock_response = AsyncMock()
+    mock_response.raise_for_status = lambda: None
+    mock_response.json = lambda: payload
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("live.broker_adapter.httpx.AsyncClient", return_value=mock_client):
+        bar = await adapter.fetch_latest_bar("MES")
+
+    assert bar is None
+
+
+@pytest.mark.asyncio
+async def test_coinbase_fetch_skips_invalid_candle():
+    payload = {
+        "candles": [
+            {"start": "1705000000", "open": "0", "high": "0", "low": "0", "close": "0", "volume": "0"},
+            {
+                "start": "1705000060",
+                "open": "62000",
+                "high": "62100",
+                "low": "61900",
+                "close": "62050",
+                "volume": "10",
+            },
+        ]
+    }
+
+    mock_client = MagicMock()
+    mock_client.get_candles.return_value = payload
+
+    adapter = CoinbaseBrokerAdapter(client=mock_client)
+    bar = await adapter.fetch_latest_bar("BTCUSD")
+
+    assert bar is not None
+    assert bar.close == 62050.0
+
+
 @pytest.mark.asyncio
 async def test_coinbase_fetch_latest_bar():
     payload = {

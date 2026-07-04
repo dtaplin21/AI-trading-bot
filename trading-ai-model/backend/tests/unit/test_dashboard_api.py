@@ -20,6 +20,9 @@ def test_dashboard_overview():
     assert "watcher_symbol_summary" in data
     assert "session_summary" in data
     assert "system_status" in data
+    assert "market_data_feeds" in data
+    assert "label" in data["market_data_feeds"]
+    assert "market_data_feeds" in data["system_status"]
     assert "kill_switch" in data
     assert "order_sizing" in data
     os = data["order_sizing"]
@@ -46,6 +49,7 @@ def test_dashboard_overview():
     assert "pipeline_running" in chart
     assert "execution_ready" in chart
     assert "watcher_bars_processed" in chart
+    assert "market_data_source" in chart
     assert any(p["id"] == "paper" for p in data["platforms"])
     assert any(p["id"] == "robinhood" for p in data["platforms"])
     assert any(p["name"] == "Tradovate" for p in data["platforms"])

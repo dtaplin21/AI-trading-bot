@@ -36,6 +36,13 @@ const EXECUTION_MODE_LABEL = {
   disabled: "Disabled",
 };
 
+const FEED_SOURCE_LABEL = {
+  coinbase: "Coinbase",
+  oanda: "OANDA",
+  polygon: "Polygon",
+  none: "None",
+};
+
 function fmtPrice(n) {
   if (n == null) return "—";
   return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -209,12 +216,15 @@ function ChartRow({ chart }) {
   const lastBarIso = chart.watcher_last_bar_at || chart.last_bar_at;
   const showNoBroker =
     feedStatus === "feeding" && !chart.execution_ready && chart.pipeline_running;
+  const feedSource = chart.market_data_source
+    ? FEED_SOURCE_LABEL[chart.market_data_source] || chart.market_data_source
+    : null;
 
   return (
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "100px 1fr auto auto auto",
+        gridTemplateColumns: "100px 1fr auto auto auto auto",
         gap: 12,
         alignItems: "center",
         padding: "10px 0",
@@ -234,6 +244,9 @@ function ChartRow({ chart }) {
         </p>
       </div>
       <span style={{ fontSize: 13, fontWeight: 500 }}>{fmtPrice(chart.last_price)}</span>
+      {feedSource && (
+        <span style={{ fontSize: 11, color: "var(--color-text-tertiary)" }}>{feedSource}</span>
+      )}
       <StatusBadge status={feedStatus} />
       {showNoBroker && <StatusBadge status="no_broker" />}
     </div>
@@ -388,6 +401,14 @@ export default function SystemStatusPanel({
                 ]
                   .filter(Boolean)
                   .join(" · ")}
+              </span>
+            </>
+          )}
+          {data.market_data_feeds?.label && (
+            <>
+              <span style={{ color: "var(--color-border-tertiary)" }}>|</span>
+              <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>
+                Feeds: {data.market_data_feeds.label}
               </span>
             </>
           )}
