@@ -46,6 +46,7 @@ class FakeDiscoveryStore:
     archive: list[dict[str, Any]] = field(default_factory=list)
     watchlist: dict[tuple[str, float], WatchlistRow] = field(default_factory=dict)
     audit_runs: list[dict[str, Any]] = field(default_factory=list)
+    last_rowcount: int = 0
 
     def connect(self):
         return _FakeConn(self)
@@ -122,6 +123,7 @@ class FakeDiscoveryStore:
             WATCHLIST_MIN_TOUCHES,
         )
 
+        self.last_rowcount = 0
         if "SELECT MIN(level_price), MAX(level_price)" in sql:
             rows = self.active_levels(str(params[0]))
             if not rows:
@@ -192,6 +194,77 @@ class FakeDiscoveryStore:
             )
             return []
 
+        if "DELETE FROM price_levels_archive pa USING price_levels pl" in sql:
+            sym = str(params[0]).upper()
+            active_keys = {
+                (row.symbol, row.level_price) for row in self.active_levels(sym)
+            }
+            self.archive = [
+                entry
+                for entry in self.archive
+                if not (
+                    entry["symbol"] == sym
+                    and (sym, entry["level_price"]) in active_keys
+                )
+            ]
+            return []
+
+        if "UPDATE price_levels pl SET is_active = FALSE FROM price_levels_archive pa" in sql:
+            sym = str(params[0]).upper()
+            archived_keys = {
+                (entry["symbol"], entry["level_price"])
+                for entry in self.archive
+                if entry["symbol"] == sym
+            }
+            for key in archived_keys:
+                if key in self.levels:
+                    self.levels[key].is_active = False
+            return []
+
+        if "DELETE FROM price_levels_archive" in sql and len(params) == 2:
+            sym, level_price = params
+            key = (str(sym).upper(), float(level_price))
+            self.archive = [
+                entry
+                for entry in self.archive
+                if not (
+                    entry["symbol"] == key[0]
+                    and entry["level_price"] == key[1]
+                )
+            ]
+            return []
+
+        if "UPDATE price_levels_archive pa" in sql:
+            reason, sym, level_price = params
+            key = (str(sym).upper(), float(level_price))
+            row = self.levels.get(key)
+            if row is None:
+                return []
+            archive_entry = {
+                "symbol": row.symbol,
+                "level_price": row.level_price,
+                "archive_reason": reason,
+            }
+            self.archive = [
+                entry
+                for entry in self.archive
+                if not (
+                    entry["symbol"] == archive_entry["symbol"]
+                    and entry["level_price"] == archive_entry["level_price"]
+                )
+            ]
+            self.archive.append(archive_entry)
+            row.is_active = False
+            wl_key = (row.symbol, row.level_price)
+            if wl_key in self.watchlist:
+                self.watchlist[wl_key].is_active = False
+            self.last_rowcount = 1
+            return []
+
+        if "SELECT level_price FROM price_levels WHERE symbol = %s AND COALESCE(is_active, TRUE) = TRUE" in sql:
+            sym = str(params[0]).upper()
+            return [(row.level_price,) for row in self.active_levels(sym)]
+
         if "INSERT INTO price_levels_archive" in sql:
             reason, sym, level_price = params
             key = (str(sym).upper(), float(level_price))
@@ -214,6 +287,7 @@ class FakeDiscoveryStore:
             wl_key = (row.symbol, row.level_price)
             if wl_key in self.watchlist:
                 self.watchlist[wl_key].is_active = False
+            self.last_rowcount = 1
             return []
 
         if "UPDATE price_levels SET is_active = FALSE" in sql:
@@ -279,6 +353,7 @@ class _FakeCursor:
 
     def execute(self, sql: str, params: tuple[Any, ...] | None = None) -> None:
         self._rows = self._store.handle_execute(" ".join(sql.split()), params or ())
+        self.rowcount = self._store.last_rowcount
 
     def fetchone(self) -> tuple[Any, ...] | None:
         return self._rows[0] if self._rows else None

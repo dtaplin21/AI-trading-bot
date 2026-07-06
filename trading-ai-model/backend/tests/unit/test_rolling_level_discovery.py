@@ -164,11 +164,14 @@ def test_archive_level_upserts_when_already_archived():
     from ml.features.rolling_level_discovery import _archive_level
 
     _archive_level(cur, "BTCUSD", 81382.84287, "drift_stale")
-    insert_sql = cur.execute.call_args_list[0][0][0]
-    assert "ON CONFLICT (symbol, level_price)" in insert_sql
+    update_sql = cur.execute.call_args_list[0][0][0]
+    assert "UPDATE price_levels_archive pa" in update_sql
 
+    cur.rowcount = 0
     _archive_level(cur, "BTCUSD", 81382.84287, "regime_shift")
-    assert cur.execute.call_count == 6
+    insert_sql = cur.execute.call_args_list[4][0][0]
+    assert "ON CONFLICT (symbol, level_price)" in insert_sql
+    assert cur.execute.call_count == 7
 
 
 def test_reactivate_requires_price_inside_zone():

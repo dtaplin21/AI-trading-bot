@@ -184,6 +184,37 @@ def test_rearchive_same_level_does_not_error(discovery_db):
     assert sum(1 for row in archived if row["level_price"] == stale_price) == 1
 
 
+def test_drift_sweep_archives_matched_stale_levels(discovery_db):
+    """Merged historical levels far from last close must not stay on the watchlist."""
+    fixture = mes_discovery_ohlcv_5m()
+    last_close = float(fixture["close"].iloc[-1])
+    stale_near_band = last_close * 1.05
+    discovery_db.seed_level("ETHUSD", stale_near_band, touch_count=8, hold_rate=0.65)
+
+    with patch(
+        "ml.features.rolling_level_discovery.check_window_coverage",
+        return_value=_full_coverage(),
+    ), patch(
+        "ml.features.rolling_level_discovery.load_bars_window",
+        return_value=fixture,
+    ):
+        result = discover_symbol(
+            "ETHUSD",
+            asset_class="crypto",
+            window_days=60,
+            dry_run=False,
+            trigger_reason="interval",
+        )
+
+    assert result.error is None
+    assert result.levels_archived >= 1
+    assert not any(
+        row.is_active and row.level_price == stale_near_band
+        for row in discovery_db.levels.values()
+    )
+    assert abs(stale_near_band - last_close) / last_close > 0.03
+
+
 def test_watchlist_sync_matches_gate_thresholds(discovery_db, monkeypatch):
     monkeypatch.setattr("ml.features.rolling_level_discovery.WATCHLIST_MIN_STRENGTH", 0.35)
     fixture = mes_discovery_ohlcv_5m()

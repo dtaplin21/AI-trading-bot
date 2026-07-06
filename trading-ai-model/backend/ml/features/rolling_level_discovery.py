@@ -241,30 +241,87 @@ def _match_level_price(price: float, existing: list[tuple[float, bool]], cluster
     return best_idx
 
 
+def _repair_archive_drift(cur, symbol: str) -> None:
+    """Fix rows left active in price_levels while still present in archive."""
+    sym = symbol.upper()
+    cur.execute(
+        """
+        DELETE FROM price_levels_archive pa
+        USING price_levels pl
+        WHERE pa.symbol = pl.symbol
+          AND pa.level_price = pl.level_price
+          AND pl.symbol = %s
+          AND COALESCE(pl.is_active, TRUE) = TRUE
+        """,
+        (sym,),
+    )
+    cur.execute(
+        """
+        UPDATE price_levels pl
+        SET is_active = FALSE
+        FROM price_levels_archive pa
+        WHERE pl.symbol = pa.symbol
+          AND pl.level_price = pa.level_price
+          AND pl.symbol = %s
+          AND COALESCE(pl.is_active, TRUE) = TRUE
+        """,
+        (sym,),
+    )
+
+
+def _clear_archive_entry(cur, symbol: str, level_price: float) -> None:
+    """Remove archive row when a level is live again (avoids archive+active drift)."""
+    cur.execute(
+        """
+        DELETE FROM price_levels_archive
+        WHERE symbol = %s AND level_price = %s
+        """,
+        (symbol.upper(), level_price),
+    )
+
+
 def _archive_level(cur, symbol: str, level_price: float, reason: str) -> None:
+    """Move a live level to archive; safe to call when already archived."""
+    sym = symbol.upper()
     cols = ", ".join(_ARCHIVE_SOURCE_COLS)
     updatable = [c for c in _ARCHIVE_SOURCE_COLS if c not in ("symbol", "level_price")]
-    set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in updatable)
+    set_from_pl = ", ".join(f"{c} = pl.{c}" for c in updatable)
+    set_from_excluded = ", ".join(f"{c} = EXCLUDED.{c}" for c in updatable)
     cur.execute(
         f"""
-        INSERT INTO price_levels_archive ({cols}, archived_at, archive_reason)
-        SELECT {cols}, NOW(), %s
-        FROM price_levels
-        WHERE symbol = %s AND level_price = %s
-        ON CONFLICT (symbol, level_price) DO UPDATE SET
-            {set_clause},
+        UPDATE price_levels_archive pa
+        SET {set_from_pl},
             archived_at = NOW(),
-            archive_reason = EXCLUDED.archive_reason
+            archive_reason = %s
+        FROM price_levels pl
+        WHERE pa.symbol = pl.symbol
+          AND pa.level_price = pl.level_price
+          AND pa.symbol = %s
+          AND pa.level_price = %s
         """,
-        (reason, symbol.upper(), level_price),
+        (reason, sym, level_price),
     )
+    if cur.rowcount == 0:
+        cur.execute(
+            f"""
+            INSERT INTO price_levels_archive ({cols}, archived_at, archive_reason)
+            SELECT {cols}, NOW(), %s
+            FROM price_levels
+            WHERE symbol = %s AND level_price = %s
+            ON CONFLICT (symbol, level_price) DO UPDATE SET
+                {set_from_excluded},
+                archived_at = NOW(),
+                archive_reason = EXCLUDED.archive_reason
+            """,
+            (reason, sym, level_price),
+        )
     cur.execute(
         """
         UPDATE price_levels
         SET is_active = FALSE
         WHERE symbol = %s AND level_price = %s
         """,
-        (symbol.upper(), level_price),
+        (sym, level_price),
     )
     cur.execute(
         """
@@ -272,7 +329,7 @@ def _archive_level(cur, symbol: str, level_price: float, reason: str) -> None:
         SET is_active = FALSE
         WHERE symbol = %s AND level_price = %s
         """,
-        (symbol.upper(), level_price),
+        (sym, level_price),
     )
 
 
@@ -352,6 +409,7 @@ def reactivate_if_price_returns(symbol: str, current_price: float) -> int:
 
 
 def _apply_level_stats(cur, symbol: str, level_price: float, level: Level) -> None:
+    _clear_archive_entry(cur, symbol, level_price)
     strength = round(level.strength_score, 4)
     cur.execute(
         """
@@ -383,6 +441,7 @@ def _apply_level_stats(cur, symbol: str, level_price: float, level: Level) -> No
 
 
 def _insert_discovered_level(cur, symbol: str, level: Level) -> None:
+    _clear_archive_entry(cur, symbol, round(level.price, 5))
     strength = round(level.strength_score, 4)
     cur.execute(
         """
@@ -606,6 +665,7 @@ def discover_symbol(
         try:
             cur = conn.cursor()
             _ensure_discovery_schema(cur)
+            _repair_archive_drift(cur, sym)
 
             envelope = price_levels_envelope(sym, conn)
             if envelope is not None:
@@ -654,9 +714,10 @@ def discover_symbol(
                     merged_level_prices.append(lp)
                     merged += 1
 
-            archived = 0
             stale_frac = STALE_PCT / 100.0
             close = result.last_close
+
+            archived_prices: set[float] = set()
 
             for lp, was_active in existing_rows:
                 if not was_active:
@@ -667,14 +728,34 @@ def discover_symbol(
                 if result.merge_mode == "regime_shift":
                     if lp < band_min or lp > band_max:
                         _archive_level(cur, sym, lp, "regime_shift")
-                        archived += 1
+                        archived_prices.add(lp)
                     continue
 
                 dist = abs(lp - close) / (close + 1e-10)
                 if dist > stale_frac:
                     _archive_level(cur, sym, lp, "drift_stale")
-                    archived += 1
+                    archived_prices.add(lp)
 
+            # Historical merges can re-activate levels far from last close; sweep them too.
+            if result.merge_mode != "regime_shift":
+                cur.execute(
+                    """
+                    SELECT level_price
+                    FROM price_levels
+                    WHERE symbol = %s AND COALESCE(is_active, TRUE) = TRUE
+                    """,
+                    (sym,),
+                )
+                for (active_lp,) in cur.fetchall():
+                    lp = float(active_lp)
+                    if lp in archived_prices:
+                        continue
+                    dist = abs(lp - close) / (close + 1e-10)
+                    if dist > stale_frac:
+                        _archive_level(cur, sym, lp, "drift_stale")
+                        archived_prices.add(lp)
+
+            archived = len(archived_prices)
             result.levels_merged = merged
             result.levels_archived = archived
             result.levels_reactivated = reactivated
