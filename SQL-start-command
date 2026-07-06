@@ -1,0 +1,1 @@
+ psql -h dpg-d8ed4h4m0tmc73eof7a0-a.oregon-postgres.render.com -U trading -d trading_ai_mu7s -p 5432
