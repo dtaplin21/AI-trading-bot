@@ -302,6 +302,107 @@ def count_sql_gate_rows(symbol: str, gate: GateParams) -> tuple[int, int]:
         conn.close()
 
 
+def gate_params_from_env() -> tuple[GateParams, float]:
+    """Production gate thresholds from env (matches LevelEntryGate defaults)."""
+    tolerance_pct = float(os.getenv("LEVEL_GATE_TOLERANCE_PCT", "0.15"))
+    gate = GateParams(
+        min_touches=int(os.getenv("LEVEL_GATE_MIN_TOUCHES", "8")),
+        min_hold_rate=float(os.getenv("LEVEL_GATE_MIN_HOLD_RATE", "0.62")),
+        min_ev_pct=float(os.getenv("LEVEL_GATE_MIN_EV_PCT", "0.05")),
+        min_rr=float(os.getenv("LEVEL_GATE_MIN_RR", "1.2")),
+    )
+    return gate, tolerance_pct
+
+
+def log_post_discovery_gate_diagnostics(symbol: str, *, days: int = 7) -> None:
+    """
+    Log gate proximity after level discovery completes.
+
+    Warns when the nearest gate-ready level is farther than LEVEL_GATE_TOLERANCE_PCT
+    (widening tolerance will not help — levels are stale vs recent price action).
+    """
+    sym = symbol.upper()
+    gate, tolerance_pct = gate_params_from_env()
+
+    try:
+        conn = _get_conn()
+        try:
+            watchlist = load_watchlist_conn(conn, sym)
+            closes_raw = load_recent_closes_conn(conn, sym, days, valid_only=False)
+            sql_ev, sql_gate = count_sql_gate_rows_conn(conn, sym, gate)
+            diag = build_load_diagnostics(
+                sym,
+                watchlist,
+                closes_raw,
+                gate,
+                sql_directional_ev=sql_ev,
+                sql_gate_match=sql_gate,
+            )
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning("%s: post-discovery gate diagnostics failed — %s", sym, exc)
+        return
+
+    if not watchlist:
+        logger.info(
+            "%s: post-discovery gate probe — no active watchlist rows",
+            sym,
+        )
+        return
+
+    closes, _ = _filter_valid_closes(closes_raw)
+    actionable = [r for r in watchlist if _is_actionable(r, gate)]
+
+    bars_passed = 0
+    if closes and actionable:
+        for price in closes:
+            if pick_gate_level(price, actionable, tolerance_pct, gate) is not None:
+                bars_passed += 1
+
+    pass_pct = (bars_passed / len(closes) * 100.0) if closes else 0.0
+
+    logger.info(
+        "%s: post-discovery gate probe | watchlist=%d actionable=%d gate_ready=%d "
+        "bars=%d pass@%0.2f%%=%d (%.2f%%) closest=%s",
+        sym,
+        diag.watchlist_loaded,
+        diag.actionable,
+        diag.gate_ready,
+        len(closes),
+        tolerance_pct,
+        bars_passed,
+        pass_pct,
+        f"{diag.closest_approach_pct:.3f}%" if diag.closest_approach_pct is not None else "n/a",
+    )
+
+    if not closes:
+        logger.warning(
+            "%s: post-discovery gate probe — no valid 1m bars in last %d days "
+            "(check market data ingestion)",
+            sym,
+            days,
+        )
+        return
+
+    if diag.gate_ready == 0:
+        logger.warning(
+            "%s: post-discovery gate probe — no gate-ready levels "
+            "(touches/hold/EV filters); tolerance changes will not help until levels qualify",
+            sym,
+        )
+        return
+
+    if diag.closest_approach_pct is not None and diag.closest_approach_pct > tolerance_pct:
+        logger.warning(
+            "%s: post-discovery gate probe — nearest gate-ready level is %.3f%% away "
+            "(LEVEL_GATE_TOLERANCE_PCT=%.2f%%); widening tolerance will not help",
+            sym,
+            diag.closest_approach_pct,
+            tolerance_pct,
+        )
+
+
 def build_load_diagnostics(
     symbol: str,
     watchlist: list[dict],

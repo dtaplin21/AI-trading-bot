@@ -159,6 +159,18 @@ def test_archive_stale_levels_no_stale_rows():
     assert count == 0
 
 
+def test_archive_level_upserts_when_already_archived():
+    cur = MagicMock()
+    from ml.features.rolling_level_discovery import _archive_level
+
+    _archive_level(cur, "BTCUSD", 81382.84287, "drift_stale")
+    insert_sql = cur.execute.call_args_list[0][0][0]
+    assert "ON CONFLICT (symbol, level_price)" in insert_sql
+
+    _archive_level(cur, "BTCUSD", 81382.84287, "regime_shift")
+    assert cur.execute.call_count == 6
+
+
 def test_reactivate_requires_price_inside_zone():
     """Current price must be inside the archived level's price_min/price_max zone."""
     with patch("ml.features.rolling_level_discovery._get_conn") as mock_conn:

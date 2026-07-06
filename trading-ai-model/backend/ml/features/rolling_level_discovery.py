@@ -243,12 +243,18 @@ def _match_level_price(price: float, existing: list[tuple[float, bool]], cluster
 
 def _archive_level(cur, symbol: str, level_price: float, reason: str) -> None:
     cols = ", ".join(_ARCHIVE_SOURCE_COLS)
+    updatable = [c for c in _ARCHIVE_SOURCE_COLS if c not in ("symbol", "level_price")]
+    set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in updatable)
     cur.execute(
         f"""
         INSERT INTO price_levels_archive ({cols}, archived_at, archive_reason)
         SELECT {cols}, NOW(), %s
         FROM price_levels
         WHERE symbol = %s AND level_price = %s
+        ON CONFLICT (symbol, level_price) DO UPDATE SET
+            {set_clause},
+            archived_at = NOW(),
+            archive_reason = EXCLUDED.archive_reason
         """,
         (reason, symbol.upper(), level_price),
     )

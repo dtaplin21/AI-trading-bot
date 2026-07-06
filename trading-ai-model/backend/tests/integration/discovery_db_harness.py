@@ -196,13 +196,20 @@ class FakeDiscoveryStore:
             reason, sym, level_price = params
             key = (str(sym).upper(), float(level_price))
             row = self.levels[key]
-            self.archive.append(
-                {
-                    "symbol": row.symbol,
-                    "level_price": row.level_price,
-                    "archive_reason": reason,
-                }
-            )
+            archive_entry = {
+                "symbol": row.symbol,
+                "level_price": row.level_price,
+                "archive_reason": reason,
+            }
+            self.archive = [
+                entry
+                for entry in self.archive
+                if not (
+                    entry["symbol"] == archive_entry["symbol"]
+                    and entry["level_price"] == archive_entry["level_price"]
+                )
+            ]
+            self.archive.append(archive_entry)
             row.is_active = False
             wl_key = (row.symbol, row.level_price)
             if wl_key in self.watchlist:

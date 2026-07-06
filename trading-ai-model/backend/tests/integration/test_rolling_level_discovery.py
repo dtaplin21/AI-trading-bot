@@ -150,6 +150,40 @@ def test_regime_shift_archives_levels_outside_discovered_band(discovery_db):
     assert any(row["archive_reason"] == "regime_shift" for row in archived)
 
 
+def test_rearchive_same_level_does_not_error(discovery_db):
+    """Re-archiving an already-archived level must not violate unique constraint."""
+    fixture = mes_discovery_ohlcv_5m()
+    stale_price = 6000.0
+    discovery_db.seed_level("BTCUSD", stale_price, touch_count=8, hold_rate=0.65)
+    discovery_db.archive.append(
+        {
+            "symbol": "BTCUSD",
+            "level_price": stale_price,
+            "archive_reason": "drift_stale",
+        }
+    )
+
+    with patch(
+        "ml.features.rolling_level_discovery.check_window_coverage",
+        return_value=_full_coverage(),
+    ), patch(
+        "ml.features.rolling_level_discovery.load_bars_window",
+        return_value=fixture,
+    ):
+        result = discover_symbol(
+            "BTCUSD",
+            asset_class="crypto",
+            window_days=60,
+            dry_run=False,
+            trigger_reason="interval",
+        )
+
+    assert result.error is None
+    assert result.levels_archived >= 1
+    archived = discovery_db.archived_levels("BTCUSD")
+    assert sum(1 for row in archived if row["level_price"] == stale_price) == 1
+
+
 def test_watchlist_sync_matches_gate_thresholds(discovery_db, monkeypatch):
     monkeypatch.setattr("ml.features.rolling_level_discovery.WATCHLIST_MIN_STRENGTH", 0.35)
     fixture = mes_discovery_ohlcv_5m()

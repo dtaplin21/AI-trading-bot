@@ -57,6 +57,14 @@ class OandaForexTickLoader:
         self._poll_interval = max(0.5, poll_interval)
         self._running = False
         self._last_prices: dict[str, float] = {}
+        self._auth_warned = False
+        if self.symbols:
+            logger.info(
+                "OandaForexTickLoader: %d symbol(s) | api_base=%s | poll=%.1fs",
+                len(self.symbols),
+                self._api_base,
+                self._poll_interval,
+            )
 
     def _instruments_csv(self) -> str:
         parts = []
@@ -102,8 +110,26 @@ class OandaForexTickLoader:
                         response = await client.get(url, params=params, headers=headers)
                         response.raise_for_status()
                         candles = (response.json().get("candles") or [])
+                    except httpx.HTTPStatusError as exc:
+                        status = exc.response.status_code
+                        if status == 401 and not self._auth_warned:
+                            self._auth_warned = True
+                            logger.error(
+                                "OandaForexTickLoader: 401 Unauthorized on %s — "
+                                "check OANDA_API_KEY matches OANDA_PRACTICE / "
+                                "OANDA_ENVIRONMENT (practice=fxpractice, live=fxtrade)",
+                                self._api_base,
+                            )
+                        elif status != 401:
+                            logger.warning(
+                                "OandaForexTickLoader[%s] HTTP %s: %s",
+                                sym,
+                                status,
+                                exc,
+                            )
+                        continue
                     except httpx.HTTPError as exc:
-                        logger.debug("OandaForexTickLoader[%s] poll error: %s", sym, exc)
+                        logger.warning("OandaForexTickLoader[%s] poll error: %s", sym, exc)
                         continue
 
                     for candle in reversed(candles):

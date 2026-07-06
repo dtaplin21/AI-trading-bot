@@ -245,19 +245,56 @@ async def test_run_once_passes_trigger_metadata_to_discover_symbol():
             error=None, skipped_reason=None, coverage_pct=100.0,
             levels_archived=0, levels_reactivated=0, watchlist_active=0, merge_mode="drift",
         )
-        await sched._run_once(
-            "MES",
-            "futures",
-            "range_escape_3.2pct_outside_range",
-            TriggerPriority.RANGE_ESCAPE,
-            runs_coalesced=2,
-        )
+        with patch(
+            "chart_watcher.level_discovery_scheduler.update_range_cache",
+        ) as mock_cache:
+            await sched._run_once(
+                "MES",
+                "futures",
+                "range_escape_3.2pct_outside_range",
+                TriggerPriority.RANGE_ESCAPE,
+                runs_coalesced=2,
+            )
 
-    mock_to_thread.assert_awaited_once()
-    args, kwargs = mock_to_thread.call_args
+    mock_cache.assert_called_once_with("MES")
+    assert mock_to_thread.await_count == 2
+    discover_call = mock_to_thread.await_args_list[0]
+    args, kwargs = discover_call
     assert args[0].__name__ == "discover_symbol"
     assert kwargs["trigger_reason"] == "range_escape"
     assert kwargs["runs_coalesced"] == 2
+    diag_call = mock_to_thread.await_args_list[1]
+    assert diag_call.args[0].__name__ == "log_post_discovery_gate_diagnostics"
+    assert diag_call.args[1] == "MES"
+
+
+@pytest.mark.asyncio
+async def test_run_once_skips_gate_diagnostics_when_disabled():
+    sched = LevelDiscoveryScheduler()
+    with patch(
+        "chart_watcher.level_discovery_scheduler.LEVEL_GATE_DIAGNOSTICS_AFTER_DISCOVERY",
+        False,
+    ):
+        with patch(
+            "chart_watcher.level_discovery_scheduler.asyncio.to_thread",
+            new_callable=AsyncMock,
+        ) as mock_to_thread:
+            mock_to_thread.return_value = MagicMock(
+                error=None, skipped_reason=None, coverage_pct=100.0,
+                levels_archived=0, levels_reactivated=0, watchlist_active=0, merge_mode="drift",
+            )
+            with patch("chart_watcher.level_discovery_scheduler.update_range_cache"):
+                await sched._run_once(
+                    "MES",
+                    "futures",
+                    "scheduled_interval",
+                    TriggerPriority.INTERVAL,
+                    runs_coalesced=0,
+                )
+
+    mock_to_thread.assert_awaited_once()
+    discover_call = mock_to_thread.await_args_list[0]
+    assert discover_call.args[0].__name__ == "discover_symbol"
 
 
 def test_warm_range_cache_logs_no_active_levels(caplog):

@@ -41,13 +41,18 @@ def oanda_api_key() -> str:
 
 
 def oanda_api_base() -> str:
+    """OANDA REST host — practice vs live from OANDA_ENVIRONMENT or Settings.oanda_practice."""
     env = os.getenv("OANDA_ENVIRONMENT", "").strip().lower()
-    if not env:
-        practice = os.getenv("OANDA_PRACTICE", "true").lower() in ("true", "1", "yes")
-        env = "practice" if practice else "live"
     if env == "live":
         return "https://api-fxtrade.oanda.com"
-    return "https://api-fxpractice.oanda.com"
+    if env == "practice":
+        return "https://api-fxpractice.oanda.com"
+
+    from config.settings import get_settings
+
+    if get_settings().oanda_practice:
+        return "https://api-fxpractice.oanda.com"
+    return "https://api-fxtrade.oanda.com"
 
 
 def parse_oanda_candle(

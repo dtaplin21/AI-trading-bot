@@ -29,7 +29,7 @@ class Settings(BaseSettings):
 
     market_data_provider: str = ""
     # Comma-separated tick/bar source order: coinbase,oanda,polygon (default)
-    market_data_primary: str = "coinbase,oanda,polygon"
+    market_data_primary: str = "oanda,coinbase,polygon"
     database_url: str = ""
     influxdb_url: str = ""
     influxdb_token: str = ""

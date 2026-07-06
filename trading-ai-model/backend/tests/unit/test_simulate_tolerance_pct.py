@@ -12,6 +12,7 @@ from scripts.simulate_tolerance_pct import (
     _actionable_rejections,
     _closest_approach_pct,
     _filter_valid_closes,
+    log_post_discovery_gate_diagnostics,
     pick_gate_level,
 )
 
@@ -80,3 +81,37 @@ def test_actionable_rejections_rr_and_either():
     assert counts["either_or_unknown_side"] == 1
     assert counts["rr_below_min"] == 1
     assert counts["actionable"] == 1
+
+
+def test_log_post_discovery_warns_when_levels_far_from_price(monkeypatch, caplog):
+    import logging
+    from unittest.mock import MagicMock
+
+    monkeypatch.setenv("LEVEL_GATE_TOLERANCE_PCT", "0.50")
+    watchlist = [_row(100.0, hold=0.65, touches=10)]
+    closes = [116.0] * 5
+
+    monkeypatch.setattr(
+        "scripts.simulate_tolerance_pct._get_conn",
+        lambda: MagicMock(),
+    )
+    monkeypatch.setattr(
+        "scripts.simulate_tolerance_pct.load_watchlist_conn",
+        lambda conn, sym: watchlist,
+    )
+    monkeypatch.setattr(
+        "scripts.simulate_tolerance_pct.load_recent_closes_conn",
+        lambda conn, sym, days, valid_only=False: closes,
+    )
+    monkeypatch.setattr(
+        "scripts.simulate_tolerance_pct.count_sql_gate_rows_conn",
+        lambda conn, sym, gate: (1, 1),
+    )
+
+    with caplog.at_level(logging.INFO, logger="simulate_tolerance"):
+        log_post_discovery_gate_diagnostics("TEST", days=7)
+
+    assert "post-discovery gate probe" in caplog.text
+    assert any(
+        "widening tolerance will not help" in r.message for r in caplog.records
+    )

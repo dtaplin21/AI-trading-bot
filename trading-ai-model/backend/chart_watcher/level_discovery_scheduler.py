@@ -35,6 +35,10 @@ LEVEL_DISCOVERY_COOLDOWN_SEC = int(os.getenv("LEVEL_DISCOVERY_COOLDOWN_SEC", "30
 LEVEL_DISCOVERY_MAX_CONCURRENT = int(os.getenv("LEVEL_DISCOVERY_MAX_CONCURRENT", "4"))
 LEVEL_DISCOVERY_RANGE_ESCAPE_PCT = float(os.getenv("LEVEL_DISCOVERY_RANGE_ESCAPE_PCT", "2.0"))
 LEVEL_DISCOVERY_REGIME_GAP_PCT = float(os.getenv("LEVEL_DISCOVERY_REGIME_GAP_PCT", "8.0"))
+LEVEL_GATE_DIAGNOSTICS_AFTER_DISCOVERY = os.getenv(
+    "LEVEL_GATE_DIAGNOSTICS_AFTER_DISCOVERY", "true"
+).lower() in ("true", "1", "yes")
+LEVEL_GATE_DIAGNOSTICS_DAYS = int(os.getenv("LEVEL_GATE_DIAGNOSTICS_DAYS", "7"))
 
 from pipeline.bar_validators import is_valid_bar_close  # noqa: E402 — after module constants
 
@@ -312,6 +316,14 @@ class LevelDiscoveryScheduler:
 
             if result.error is None and result.skipped_reason is None:
                 update_range_cache(sym)
+                if LEVEL_GATE_DIAGNOSTICS_AFTER_DISCOVERY:
+                    from scripts.simulate_tolerance_pct import log_post_discovery_gate_diagnostics
+
+                    await asyncio.to_thread(
+                        log_post_discovery_gate_diagnostics,
+                        sym,
+                        days=LEVEL_GATE_DIAGNOSTICS_DAYS,
+                    )
 
             logger.info(
                 "%s: discovery run finished | coverage=%.1f%% archived=%d "

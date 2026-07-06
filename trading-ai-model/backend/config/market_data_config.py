@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-DEFAULT_MARKET_DATA_PRIMARY = "coinbase,oanda,polygon"
+DEFAULT_MARKET_DATA_PRIMARY = "oanda,coinbase,polygon"
 
 
 def parse_market_data_primary(raw: str | None = None) -> tuple[str, ...]:

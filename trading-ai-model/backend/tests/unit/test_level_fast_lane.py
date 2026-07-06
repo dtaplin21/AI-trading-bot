@@ -67,3 +67,74 @@ async def test_fast_lane_skips_full_pipeline(monkeypatch):
     assert result.plan.action == TradeAction.ENTER_LONG
     assert result.executed is True
     supervisor._run_methods_concurrent.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fast_lane_executes_by_default_in_live_mode(monkeypatch):
+    """Live supervisors must execute without explicit execute=True (ChartWatchRunner path)."""
+    monkeypatch.delenv("LEVEL_GATE_DISABLED", raising=False)
+    monkeypatch.setenv("LEVEL_FAST_LANE", "true")
+
+    supervisor = TradingPipelineSupervisor("EURUSD", "5m", news_agent=None, paper_mode=False)
+    setup = _level_setup()
+
+    with patch.object(supervisor._level_gate, "check", return_value=setup):
+        supervisor._risk_eng.approve_level_fast_lane = MagicMock(
+            return_value=RiskDecision(
+                approved=True,
+                symbol="EURUSD",
+                timestamp=datetime.now(tz=timezone.utc),
+                position_size_contracts=1,
+            )
+        )
+        supervisor._execute = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+        bar = OHLCV(
+            symbol="EURUSD",
+            timeframe="5m",
+            timestamp=datetime.now(tz=timezone.utc),
+            open=1.0844,
+            high=1.0846,
+            low=1.0842,
+            close=1.0845,
+            volume=100.0,
+        )
+        result = await supervisor.on_new_bar(bar, ohlcv=None)
+
+    assert result.executed is True
+    supervisor._execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_fast_lane_respects_execute_false(monkeypatch):
+    monkeypatch.delenv("LEVEL_GATE_DISABLED", raising=False)
+    monkeypatch.setenv("LEVEL_FAST_LANE", "true")
+
+    supervisor = TradingPipelineSupervisor("EURUSD", "5m", news_agent=None, paper_mode=False)
+    setup = _level_setup()
+
+    with patch.object(supervisor._level_gate, "check", return_value=setup):
+        supervisor._risk_eng.approve_level_fast_lane = MagicMock(
+            return_value=RiskDecision(
+                approved=True,
+                symbol="EURUSD",
+                timestamp=datetime.now(tz=timezone.utc),
+                position_size_contracts=1,
+            )
+        )
+        supervisor._execute = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+        bar = OHLCV(
+            symbol="EURUSD",
+            timeframe="5m",
+            timestamp=datetime.now(tz=timezone.utc),
+            open=1.0844,
+            high=1.0846,
+            low=1.0842,
+            close=1.0845,
+            volume=100.0,
+        )
+        result = await supervisor.on_new_bar(bar, ohlcv=None, execute=False)
+
+    assert result.executed is False
+    supervisor._execute.assert_not_called()

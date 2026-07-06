@@ -24,6 +24,12 @@ def test_parse_market_data_primary_strips_and_lowercases():
     )
 
 
+def test_polygon_demoted_when_oanda_before_polygon():
+    primary = ("oanda", "coinbase", "polygon")
+    assert polygon_demoted_for_forex(primary) is True
+    assert polygon_demoted_for_crypto(primary) is True
+
+
 def test_polygon_demoted_when_coinbase_before_polygon():
     primary = ("coinbase", "oanda", "polygon")
     assert polygon_demoted_for_crypto(primary) is True

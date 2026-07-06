@@ -13,6 +13,7 @@ from live.broker_adapter import (
     default_worker_broker,
     fetch_latest_bar_for_symbol,
     get_broker_adapter,
+    oanda_api_base,
     parse_coinbase_candle,
     parse_oanda_candle,
 )
@@ -354,3 +355,33 @@ def test_default_worker_broker_falls_back_paper(monkeypatch):
     monkeypatch.delenv("POLYGON_API_KEY", raising=False)
     monkeypatch.setenv("PAPER_TRADING_ENABLED", "true")
     assert default_worker_broker() == "paper"
+
+
+def test_oanda_api_base_live_from_settings(monkeypatch):
+    from config.settings import get_settings
+
+    monkeypatch.delenv("OANDA_ENVIRONMENT", raising=False)
+    monkeypatch.setenv("OANDA_PRACTICE", "false")
+    get_settings.cache_clear()
+    assert oanda_api_base() == "https://api-fxtrade.oanda.com"
+    get_settings.cache_clear()
+
+
+def test_oanda_api_base_practice_from_settings(monkeypatch):
+    from config.settings import get_settings
+
+    monkeypatch.delenv("OANDA_ENVIRONMENT", raising=False)
+    monkeypatch.setenv("OANDA_PRACTICE", "true")
+    get_settings.cache_clear()
+    assert oanda_api_base() == "https://api-fxpractice.oanda.com"
+    get_settings.cache_clear()
+
+
+def test_oanda_api_base_environment_override(monkeypatch):
+    from config.settings import get_settings
+
+    monkeypatch.setenv("OANDA_ENVIRONMENT", "live")
+    monkeypatch.setenv("OANDA_PRACTICE", "true")
+    get_settings.cache_clear()
+    assert oanda_api_base() == "https://api-fxtrade.oanda.com"
+    get_settings.cache_clear()

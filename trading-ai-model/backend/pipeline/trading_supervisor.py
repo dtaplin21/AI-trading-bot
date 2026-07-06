@@ -172,7 +172,8 @@ class TradingPipelineSupervisor:
     ) -> TradingPipelineResult:
         result = TradingPipelineResult()
         result.snapshot_id = str(uuid.uuid4())
-        should_execute = self.paper if execute is None else execute
+        # Default execute in both paper and live; self.paper selects sim vs broker in _execute.
+        should_execute = True if execute is None else execute
 
         try:
             if self._pos_monitor:
