@@ -139,17 +139,29 @@ def _ohlcv_timeframes_for_chart(chart: WatchedChart) -> list[str]:
     return ordered
 
 
+def _should_skip_stale_db_fallback(chart: WatchedChart) -> bool:
+    """
+    Hide pre-OANDA/Coinbase Polygon bars when the worker has never fed this symbol.
+
+    Prevents the dashboard from showing ancient forex/crypto prices on stale fallback.
+    """
+    if chart.watcher_bars_processed > 0:
+        return False
+    if chart.asset_class in ("forex", "crypto"):
+        return True
+    return False
+
+
 def build_watched_charts() -> list[WatchedChart]:
     """
     Watched chart list from WATCHER_SYMBOLS (same as worker).
-    Enriches each entry with latest price + bar count from DB when available,
-    then watcher heartbeat feed status when runtime_controls is populated.
+    Watcher heartbeat first, then DB enrich (skips stale demoted-feed symbols).
     """
     charts = watcher_charts_for_dashboard(include_session_status=True)
+    charts = _enrich_from_watcher_runtime(charts)
     db = _get_db()
     if db:
         charts = _enrich_from_db(charts, db)
-    charts = _enrich_from_watcher_runtime(charts)
     return charts
 
 
@@ -199,6 +211,8 @@ def _enrich_from_watcher_runtime(charts: list[WatchedChart]) -> list[WatchedChar
 def _enrich_from_db(charts: list[WatchedChart], db: TimescaleStore) -> list[WatchedChart]:
     """Attach latest price and bar count from TimescaleDB."""
     for chart in charts:
+        if _should_skip_stale_db_fallback(chart):
+            continue
         for tf in _ohlcv_timeframes_for_chart(chart):
             try:
                 df = db.load_ohlcv(chart.symbol, tf, limit=1)

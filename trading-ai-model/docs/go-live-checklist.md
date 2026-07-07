@@ -191,7 +191,7 @@ Use when migrating off Polygon forex/crypto feeds.
 SELECT symbol,
        COUNT(*) AS bars,
        COUNT(*) FILTER (WHERE close <= 0) AS zero_close
-FROM ohlcv
+FROM ohlcv_candles
 WHERE timeframe = '1m'
   AND time > NOW() - INTERVAL '24 hours'
 GROUP BY symbol
@@ -204,7 +204,7 @@ ORDER BY zero_close DESC, symbol;
 ### Optional: delete historical zero bars
 
 ```sql
-DELETE FROM ohlcv
+DELETE FROM ohlcv_candles
 WHERE close <= 0
   AND symbol IN (
     'EURUSD','GBPUSD','USDJPY','USDCHF','AUDUSD',
@@ -212,7 +212,10 @@ WHERE close <= 0
   );
 ```
 
-Run only after new feeds are stable.
+Migration `011_purge_demoted_polygon_bars.sql` also removes all legacy Polygon forex rows
+so stale dashboard fallback does not show June-era prices before OANDA feeds resume.
+
+Run only after new feeds are stable (or apply migration via `python scripts/run_migrations.py`).
 
 ---
 
