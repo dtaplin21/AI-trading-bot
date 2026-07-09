@@ -206,6 +206,7 @@ def wilson_lower_bound(hold_rate: float, n: int) -> float:
 
 
 _pending_touches: dict[str, list[dict[str, Any]]] = {}
+_hydrated_pending_symbols: set[str] = set()
 _schema_ready = False
 
 
@@ -656,69 +657,141 @@ class LevelIntelligenceSystem:
         if latest_close <= 0:
             return
 
+        self._ensure_pending_hydrated()
+        from ml.features.touch_outcome_classifier import drain_stale_pending_for_symbol
+
+        drain_stale_pending_for_symbol(self)
         self._resolve_pending(df, bar_idx)
         touch = self._detect_touch(df, bar_idx)
         if touch is None:
             return
 
-        approach, _ = touch
+        approach, level_price = touch
         snapshot = build_snapshot(self.symbol, df, bar_idx, approach)
+        snapshot.level_price = level_price
         touch_id = self.record_touch(snapshot)
         if touch_id < 0:
             return
 
+        touched_at = snapshot.touched_at
+        if touched_at.tzinfo is None:
+            touched_at = touched_at.replace(tzinfo=timezone.utc)
+
         _pending_touches.setdefault(self.symbol, []).append(
             {
                 "touch_id": touch_id,
-                "bar_index": bar_idx,
+                "touched_at": touched_at,
                 "level_price": snapshot.level_price,
+                "price_at_touch": snapshot.price_at_touch,
                 "approach": approach,
             }
         )
 
+    def _ensure_pending_hydrated(self) -> None:
+        """Load recent in-window pending touches from DB after worker restart."""
+        if self.symbol in _hydrated_pending_symbols or not _db_available():
+            return
+        _hydrated_pending_symbols.add(self.symbol)
+
+        try:
+            conn = _get_conn()
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT id, touched_at, price_at_touch, approach, level_price
+                FROM level_touches
+                WHERE symbol = %s
+                  AND (outcome IS NULL OR outcome = 'pending')
+                  AND touched_at >= NOW() - make_interval(mins => %s)
+                ORDER BY touched_at ASC
+                """,
+                (self.symbol, OUTCOME_WINDOW + 5),
+            )
+            rows = cur.fetchall()
+            cur.close()
+            conn.close()
+        except Exception as exc:
+            logger.debug("%s: pending hydrate failed: %s", self.symbol, exc)
+            return
+
+        if not rows:
+            return
+
+        existing_ids = {int(item["touch_id"]) for item in _pending_touches.get(self.symbol, [])}
+        for touch_id, touched_at, price_at_touch, approach, level_price in rows:
+            tid = int(touch_id)
+            if tid in existing_ids:
+                continue
+            _pending_touches.setdefault(self.symbol, []).append(
+                {
+                    "touch_id": tid,
+                    "touched_at": touched_at,
+                    "level_price": float(level_price),
+                    "price_at_touch": float(price_at_touch),
+                    "approach": str(approach),
+                }
+            )
+        logger.info(
+            "%s: hydrated %d recent pending touches from DB",
+            self.symbol,
+            len(rows),
+        )
+
     def _resolve_pending(self, df: pd.DataFrame, current_idx: int) -> None:
+        from ml.features.touch_outcome_classifier import (
+            bar_index_for_timestamp,
+            classify_from_forward_bars,
+        )
+
         pending = _pending_touches.get(self.symbol, [])
         if not pending:
             return
 
+        current_ts = pd.to_datetime(df.index[current_idx], utc=True)
         close = np.asarray(df["close"], dtype=float)
         high = np.asarray(df["high"], dtype=float)
         low = np.asarray(df["low"], dtype=float)
-        rev = REVERSAL_PCT / 100.0
         remaining: list[dict[str, Any]] = []
 
         for item in pending:
-            bars_elapsed = current_idx - int(item["bar_index"])
-            if bars_elapsed < OUTCOME_WINDOW:
+            touched_at = item["touched_at"]
+            if not isinstance(touched_at, datetime):
+                touched_at = datetime.fromisoformat(str(touched_at).replace("Z", "+00:00"))
+            if touched_at.tzinfo is None:
+                touched_at = touched_at.replace(tzinfo=timezone.utc)
+
+            elapsed_min = (current_ts.to_pydatetime() - touched_at).total_seconds() / 60.0
+            if elapsed_min < OUTCOME_WINDOW:
                 remaining.append(item)
                 continue
 
-            touch_idx = int(item["bar_index"])
+            touch_idx = bar_index_for_timestamp(df, touched_at)
+            if touch_idx is None:
+                remaining.append(item)
+                continue
+
             start = touch_idx + 1
             end = min(touch_idx + OUTCOME_WINDOW + 1, len(df))
             if start >= end:
                 remaining.append(item)
                 continue
 
-            current_price = float(close[touch_idx])
-            future_high = float(np.max(high[start:end]))
-            future_low = float(np.min(low[start:end]))
-            up_move = (future_high - current_price) / (current_price + 1e-10)
-            down_move = (current_price - future_low) / (current_price + 1e-10)
-            approach = item["approach"]
-
-            if approach == "from_above":
-                outcome = "hold" if up_move >= rev else "break"
-                move = up_move if outcome == "hold" else -down_move
-            else:
-                outcome = "hold" if down_move >= rev else "break"
-                move = -down_move if outcome == "hold" else up_move
+            price_at_touch = float(item.get("price_at_touch") or close[touch_idx])
+            result = classify_from_forward_bars(
+                price_at_touch,
+                str(item["approach"]),
+                high[start:end],
+                low[start:end],
+            )
+            if result is None:
+                remaining.append(item)
+                continue
 
             self.update_outcome(
                 int(item["touch_id"]),
-                outcome,
-                float(move) * 100,
-                bars_elapsed,
+                result.outcome,
+                result.price_move_after,
+                result.bars_to_outcome,
             )
 
         _pending_touches[self.symbol] = remaining

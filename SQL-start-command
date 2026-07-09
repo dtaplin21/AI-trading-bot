@@ -1,1 +1,3 @@
- psql -h dpg-d8ed4h4m0tmc73eof7a0-a.oregon-postgres.render.com -U trading -d trading_ai_mu7s -p 5432
+# Render external Postgres — override pooler PGSSLROOTCERT (e.g. ~/.postgresql/pooler-root.crt)
+PGSSLMODE=require PGSSLROOTCERT="$(cd trading-ai-model/backend && .venv/bin/python -c 'import certifi; print(certifi.where())')" \
+  psql -h dpg-d8ed4h4m0tmc73eof7a0-a.oregon-postgres.render.com -U trading -d trading_ai_mu7s -p 5432
