@@ -194,6 +194,16 @@ class ChartWatchRunner:
         await asyncio.to_thread(warm_range_cache, list(SYMBOLS))
         await get_discovery_scheduler().maybe_enqueue_startup_discovery(list(SYMBOLS))
 
+        from ml.features.touch_outcome_maintenance import (
+            TOUCH_MAINTENANCE_ON_STARTUP,
+            run_periodic_maintenance_loop,
+            run_startup_maintenance,
+        )
+
+        if TOUCH_MAINTENANCE_ON_STARTUP:
+            asyncio.create_task(run_startup_maintenance(list(SYMBOLS)))
+        asyncio.create_task(run_periodic_maintenance_loop(list(SYMBOLS)))
+
         try:
             if self._mode == WatcherMode.LIVE:
                 await self._run_live()

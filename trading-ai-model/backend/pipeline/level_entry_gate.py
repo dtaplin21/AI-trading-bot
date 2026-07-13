@@ -72,12 +72,12 @@ def is_actionable_watchlist_row(row: dict[str, Any]) -> bool:
     if rr < min_rr:
         return False
 
-    min_win = float(os.getenv("LEVEL_GATE_MIN_WIN_RATE", "0.55"))
+    min_win = float(os.getenv("LEVEL_GATE_MIN_WIN_RATE", "0.52"))
     win = _as_float(row.get("exit_win_rate"))
     if win is None or win < min_win:
         return False
 
-    min_strength = float(os.getenv("LEVEL_GATE_MIN_STRENGTH", "0.55"))
+    min_strength = float(os.getenv("LEVEL_GATE_MIN_STRENGTH", "0.50"))
     strength = _as_float(row.get("strength_score"))
     if strength is None or strength < min_strength:
         return False
@@ -95,7 +95,7 @@ class LevelEntryGate:
         self.symbol = symbol.upper()
         self.min_touches = int(os.getenv("LEVEL_GATE_MIN_TOUCHES", "8"))
         self.min_ev_pct = float(os.getenv("LEVEL_GATE_MIN_EV_PCT", "0.05"))
-        self.min_hold_rate = float(os.getenv("LEVEL_GATE_MIN_HOLD_RATE", "0.62"))
+        self.min_hold_rate = float(os.getenv("LEVEL_GATE_MIN_HOLD_RATE", "0.51"))
         self.tolerance_pct = float(os.getenv("LEVEL_GATE_TOLERANCE_PCT", "0.15"))
 
     def check(

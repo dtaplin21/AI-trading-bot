@@ -198,11 +198,11 @@ def _get_conn():
 def wilson_lower_bound(hold_rate: float, n: int) -> float:
     if n < 1:
         return 0.0
-    p = hold_rate
+    p = float(hold_rate)
     z = 1.96
     num = p + z * z / (2 * n) - z * np.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
     den = 1 + z * z / n
-    return max(0.0, num / den)
+    return float(max(0.0, num / den))
 
 
 _pending_touches: dict[str, list[dict[str, Any]]] = {}
@@ -220,9 +220,9 @@ class LevelIntelligenceSystem:
         "equity": 0.12,
     }
 
-    WATCHLIST_MIN_HOLD_RATE = float(os.getenv("LEVEL_INTEL_WATCH_MIN_HOLD", "0.62"))
+    WATCHLIST_MIN_HOLD_RATE = float(os.getenv("LEVEL_INTEL_WATCH_MIN_HOLD", "0.51"))
     WATCHLIST_MIN_TOUCHES = int(os.getenv("LEVEL_INTEL_WATCH_MIN_TOUCHES", "5"))
-    WATCHLIST_MIN_STRENGTH = float(os.getenv("LEVEL_INTEL_WATCH_MIN_STRENGTH", "0.55"))
+    WATCHLIST_MIN_STRENGTH = float(os.getenv("LEVEL_INTEL_WATCH_MIN_STRENGTH", "0.50"))
 
     def __init__(self, symbol: str, asset_class: str):
         self.symbol = symbol.upper()
@@ -471,8 +471,10 @@ class LevelIntelligenceSystem:
             n = int(touch_count or 0)
             p = float(hold_rate or 0)
             strength = wilson_lower_bound(p, n)
-            entry_side = (
-                "BUY" if role == "SUPPORT" else "SELL" if role == "RESISTANCE" else "EITHER"
+            from ml.features.entry_side_resolver import resolve_entry_side_for_level
+
+            entry_side, _intel = resolve_entry_side_for_level(
+                conn, symbol, float(level_price), str(role or "UNKNOWN")
             )
             qualifies = (
                 n >= self.WATCHLIST_MIN_TOUCHES

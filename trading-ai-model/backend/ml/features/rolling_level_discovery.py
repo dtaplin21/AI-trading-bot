@@ -22,9 +22,9 @@ from ml.features.level_intelligence import SCHEMA_SQL
 
 logger = logging.getLogger("rolling_level_discovery")
 
-WATCHLIST_MIN_HOLD = float(os.getenv("LEVEL_INTEL_WATCH_MIN_HOLD", "0.62"))
+WATCHLIST_MIN_HOLD = float(os.getenv("LEVEL_INTEL_WATCH_MIN_HOLD", "0.51"))
 WATCHLIST_MIN_TOUCHES = int(os.getenv("LEVEL_INTEL_WATCH_MIN_TOUCHES", "5"))
-WATCHLIST_MIN_STRENGTH = float(os.getenv("LEVEL_INTEL_WATCH_MIN_STRENGTH", "0.55"))
+WATCHLIST_MIN_STRENGTH = float(os.getenv("LEVEL_INTEL_WATCH_MIN_STRENGTH", "0.50"))
 STALE_PCT = float(os.getenv("LEVEL_DISCOVERY_STALE_PCT", "3.0"))
 REGIME_GAP_PCT = float(os.getenv("LEVEL_DISCOVERY_REGIME_GAP_PCT", "8.0"))
 MIN_BARS = int(os.getenv("LEVEL_DISCOVERY_MIN_BARS", "500"))
@@ -542,7 +542,25 @@ def _sync_watchlist(cur, symbol: str) -> int:
         (symbol.upper(),),
     )
     row = cur.fetchone()
-    return int(row[0]) if row else 0
+    count = int(row[0]) if row else 0
+    return count
+
+
+def _sync_watchlist_with_entry_sides(conn, symbol: str) -> int:
+    """Sync watchlist and resolve MIXED/EITHER entry sides from touch history."""
+    cur = conn.cursor()
+    active = _sync_watchlist(cur, symbol)
+    conn.commit()
+    cur.close()
+    from ml.features.entry_side_resolver import sync_watchlist_entry_sides
+
+    sync_watchlist_entry_sides(conn, symbol)
+    return active
+
+
+def sync_watchlist_for_symbol(conn, symbol: str) -> int:
+    """Public watchlist resync from price_levels (same logic as discovery)."""
+    return _sync_watchlist_with_entry_sides(conn, symbol)
 
 
 def _write_audit_row(cur, result: DiscoveryResult) -> None:
@@ -759,7 +777,7 @@ def discover_symbol(
             result.levels_merged = merged
             result.levels_archived = archived
             result.levels_reactivated = reactivated
-            result.watchlist_active = _sync_watchlist(cur, sym)
+            result.watchlist_active = _sync_watchlist_with_entry_sides(conn, sym)
             _write_audit_row(cur, result)
             conn.commit()
             cur.close()

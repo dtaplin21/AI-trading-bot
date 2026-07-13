@@ -149,6 +149,8 @@ def classify_touch_row(
 
 def reaggregate_price_levels(conn, symbol: str) -> None:
     """Rebuild price_levels touch/hold/break counts from classified level_touches."""
+    from ml.features.level_intelligence import wilson_lower_bound
+
     sym = symbol.upper()
     cur = conn.cursor()
     cur.execute(
@@ -188,6 +190,24 @@ def reaggregate_price_levels(conn, symbol: str) -> None:
         """,
         (sym, sym),
     )
+    cur.execute(
+        """
+        SELECT level_price, touch_count, hold_rate
+        FROM price_levels
+        WHERE symbol = %s AND touch_count > 0
+        """,
+        (sym,),
+    )
+    for level_price, touch_count, hold_rate in cur.fetchall():
+        strength = wilson_lower_bound(float(hold_rate or 0), int(touch_count or 0))
+        cur.execute(
+            """
+            UPDATE price_levels
+            SET strength_score = %s
+            WHERE symbol = %s AND level_price = %s
+            """,
+            (round(strength, 4), sym, float(level_price)),
+        )
     conn.commit()
     cur.close()
 
@@ -293,10 +313,20 @@ def backfill_pending_outcomes(
         if not dry_run and stats["classified"] > 0:
             reaggregate_price_levels(conn, sym)
             logger.info("%s: reaggregated price_levels after backfill", sym)
+            _post_classify_watchlist_sync(conn, sym)
     finally:
         conn.close()
 
     return stats
+
+
+def _post_classify_watchlist_sync(conn, symbol: str) -> None:
+    """Resync watchlist and resolve EITHER entry sides after bulk classification."""
+    from ml.features.rolling_level_discovery import sync_watchlist_for_symbol
+
+    sym = symbol.upper()
+    active = sync_watchlist_for_symbol(conn, sym)
+    logger.info("%s: post-classify watchlist sync — active=%d", sym, active)
 
 
 def drain_stale_pending_for_symbol(
